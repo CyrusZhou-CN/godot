@@ -3792,7 +3792,7 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 				menu->add_icon_shortcut(get_editor_theme_icon(SNAME("ScriptCreate")), ED_GET_SHORTCUT("scene_tree/attach_script"), TOOL_ATTACH_SCRIPT);
 			}
 
-			if (existing_script.is_valid()) {
+			if (existing_script.is_valid() && !existing_script->is_built_in()) {
 				menu->add_icon_shortcut(get_editor_theme_icon(SNAME("ScriptExtend")), ED_GET_SHORTCUT("scene_tree/extend_script"), TOOL_EXTEND_SCRIPT);
 			}
 		}
@@ -4268,7 +4268,7 @@ List<Node *> SceneTreeDock::paste_nodes(bool p_paste_as_sibling) {
 			// and added to the node_clipboard_edited_scene_owned list.
 			if (d != dup && E2.key->get_owner() == nullptr) {
 				if (node_clipboard_edited_scene_owned.find(const_cast<Node *>(E2.key))) {
-					ur->add_do_method(d, "set_owner", edited_scene);
+					ur->add_do_method(d, "set_owner", owner);
 				}
 			}
 		}
