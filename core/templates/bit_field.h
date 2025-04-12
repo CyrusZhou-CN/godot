@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  gltf_light.h                                                          */
+/*  bit_field.h                                                           */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,56 +30,44 @@
 
 #pragma once
 
-#include "core/io/resource.h"
+#include "core/typedefs.h"
 
-class GLTFObjectModelProperty;
-class Light3D;
+#include <type_traits>
 
-// https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_lights_punctual
+// TODO: Replace `typename` with enum concept once C++20 concepts/constraints are allowed.
 
-class GLTFLight : public Resource {
-	GDCLASS(GLTFLight, Resource)
-	friend class GLTFDocument;
-
-protected:
-	static void _bind_methods();
-
-private:
-	Color color = Color(1.0f, 1.0f, 1.0f);
-	float intensity = 1.0f;
-	String light_type;
-	float range = Math::INF;
-	float inner_cone_angle = 0.0f;
-	float outer_cone_angle = Math::TAU / 8.0f;
-	Dictionary additional_data;
+template <typename T>
+class BitField {
+	static_assert(std::is_enum_v<T>);
+	uint64_t value;
 
 public:
-	static void set_cone_inner_attenuation_conversion_expressions(Ref<GLTFObjectModelProperty> &r_obj_model_prop);
+	_ALWAYS_INLINE_ constexpr void set_flag(BitField p_flag) { value |= p_flag.value; }
+	_ALWAYS_INLINE_ constexpr bool has_flag(BitField p_flag) const { return value & p_flag.value; }
+	_ALWAYS_INLINE_ constexpr bool is_empty() const { return value == 0; }
+	_ALWAYS_INLINE_ constexpr void clear_flag(BitField p_flag) { value &= ~p_flag.value; }
+	_ALWAYS_INLINE_ constexpr void clear() { value = 0; }
 
-	Color get_color();
-	void set_color(Color p_color);
+	[[nodiscard]] _ALWAYS_INLINE_ constexpr BitField get_combined(BitField p_other) const { return BitField(value | p_other.value); }
+	[[nodiscard]] _ALWAYS_INLINE_ constexpr BitField get_shared(BitField p_other) const { return BitField(value & p_other.value); }
+	[[nodiscard]] _ALWAYS_INLINE_ constexpr BitField get_different(BitField p_other) const { return BitField(value ^ p_other.value); }
 
-	float get_intensity();
-	void set_intensity(float p_intensity);
+	_ALWAYS_INLINE_ constexpr BitField() = default;
+	_ALWAYS_INLINE_ constexpr BitField(T p_value) :
+			value(static_cast<uint64_t>(p_value)) {}
+	_ALWAYS_INLINE_ constexpr operator T() const { return static_cast<T>(value); }
 
-	String get_light_type();
-	void set_light_type(String p_light_type);
+	// TODO: Unify as single constructor once C++20 `explicit` conditionals are allowed.
 
-	float get_range();
-	void set_range(float p_range);
-
-	float get_inner_cone_angle();
-	void set_inner_cone_angle(float p_inner_cone_angle);
-
-	float get_outer_cone_angle();
-	void set_outer_cone_angle(float p_outer_cone_angle);
-
-	static Ref<GLTFLight> from_node(const Light3D *p_light);
-	Light3D *to_node() const;
-
-	static Ref<GLTFLight> from_dictionary(const Dictionary p_dictionary);
-	Dictionary to_dictionary() const;
-
-	Variant get_additional_data(const StringName &p_extension_name);
-	void set_additional_data(const StringName &p_extension_name, Variant p_additional_data);
+	template <typename V, std::enable_if_t<std::is_arithmetic_v<V> && std::is_convertible_v<T, int>, int> = 0>
+	_ALWAYS_INLINE_ constexpr BitField(V p_value) :
+			value(static_cast<uint64_t>(p_value)) {}
+	template <typename V, std::enable_if_t<std::is_arithmetic_v<V> && !std::is_convertible_v<T, int>, int> = 0>
+	_ALWAYS_INLINE_ constexpr explicit BitField(V p_value) :
+			value(static_cast<uint64_t>(p_value)) {}
+	template <typename V, std::enable_if_t<std::is_arithmetic_v<V>, int> = 0>
+	_ALWAYS_INLINE_ constexpr explicit operator V() const { return static_cast<V>(value); }
 };
+
+// Implicitly zero-constructible as a trivially-constructible type.
+static_assert(is_zero_constructible_v<BitField<Error>>);
