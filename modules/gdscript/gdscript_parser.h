@@ -851,8 +851,10 @@ public:
 		IdentifierNode *identifier = nullptr;
 		Vector<ParameterNode *> parameters;
 		HashMap<StringName, int> parameters_indices;
+		ParameterNode *rest_parameter = nullptr;
 		TypeNode *return_type = nullptr;
 		SuiteNode *body = nullptr;
+		bool is_abstract = false;
 		bool is_static = false; // For lambdas it's determined in the analyzer.
 		bool is_coroutine = false;
 		Variant rpc_config;
@@ -867,6 +869,8 @@ public:
 
 		bool resolved_signature = false;
 		bool resolved_body = false;
+
+		_FORCE_INLINE_ bool is_vararg() const { return rest_parameter != nullptr; }
 
 		FunctionNode() {
 			type = FUNCTION;
@@ -1502,7 +1506,7 @@ private:
 	ClassNode *parse_class(bool p_is_abstract, bool p_is_static);
 	void parse_class_name();
 	void parse_extends();
-	void parse_class_body(bool p_is_abstract, bool p_is_multiline);
+	void parse_class_body(bool p_first_is_abstract, bool p_is_multiline);
 	template <typename T>
 	void parse_class_member(T *(GDScriptParser::*p_parse_function)(bool, bool), AnnotationInfo::TargetKind p_target, const String &p_member_kind, bool p_is_abstract = false, bool p_is_static = false);
 	SignalNode *parse_signal(bool p_is_abstract, bool p_is_static);
