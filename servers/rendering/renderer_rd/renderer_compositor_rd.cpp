@@ -96,6 +96,7 @@ void RendererCompositorRD::blit_render_targets_to_screen(DisplayServer::WindowID
 		blit.push_constant.upscale = p_render_targets[i].lens_distortion.upscale;
 		blit.push_constant.aspect_ratio = p_render_targets[i].lens_distortion.aspect_ratio;
 		blit.push_constant.convert_to_srgb = texture_storage->render_target_is_using_hdr(p_render_targets[i].render_target);
+		blit.push_constant.use_debanding = texture_storage->render_target_is_using_debanding(p_render_targets[i].render_target);
 
 		RD::get_singleton()->draw_list_set_push_constant(draw_list, &blit.push_constant, sizeof(BlitPushConstant));
 		RD::get_singleton()->draw_list_draw(draw_list, true);
@@ -158,11 +159,6 @@ void RendererCompositorRD::initialize() {
 
 		blit.sampler = RD::get_singleton()->sampler_create(RD::SamplerState());
 	}
-#if defined(MACOS_ENABLED) && defined(__x86_64__)
-	if (scene) {
-		scene->get_sky()->check_cubemap_array();
-	}
-#endif
 }
 
 uint64_t RendererCompositorRD::frame = 1;
@@ -180,8 +176,8 @@ void RendererCompositorRD::finalize() {
 
 	//only need to erase these, the rest are erased by cascade
 	blit.shader.version_free(blit.shader_version);
-	RD::get_singleton()->free(blit.index_buffer);
-	RD::get_singleton()->free(blit.sampler);
+	RD::get_singleton()->free_rid(blit.index_buffer);
+	RD::get_singleton()->free_rid(blit.sampler);
 }
 
 void RendererCompositorRD::set_boot_image(const Ref<Image> &p_image, const Color &p_color, bool p_scale, bool p_use_filter) {
@@ -257,6 +253,7 @@ void RendererCompositorRD::set_boot_image(const Ref<Image> &p_image, const Color
 	blit.push_constant.upscale = 1.0;
 	blit.push_constant.aspect_ratio = 1.0;
 	blit.push_constant.convert_to_srgb = false;
+	blit.push_constant.use_debanding = false;
 
 	RD::get_singleton()->draw_list_set_push_constant(draw_list, &blit.push_constant, sizeof(BlitPushConstant));
 	RD::get_singleton()->draw_list_draw(draw_list, true);
@@ -266,7 +263,7 @@ void RendererCompositorRD::set_boot_image(const Ref<Image> &p_image, const Color
 	RD::get_singleton()->swap_buffers(true);
 
 	texture_storage->texture_free(texture);
-	RD::get_singleton()->free(sampler);
+	RD::get_singleton()->free_rid(sampler);
 }
 
 RendererCompositorRD *RendererCompositorRD::singleton = nullptr;

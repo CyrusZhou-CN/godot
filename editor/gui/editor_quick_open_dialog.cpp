@@ -32,13 +32,13 @@
 
 #include "core/config/project_settings.h"
 #include "core/string/fuzzy_search.h"
-#include "editor/editor_file_system.h"
+#include "editor/docks/filesystem_dock.h"
 #include "editor/editor_node.h"
-#include "editor/editor_paths.h"
-#include "editor/editor_resource_preview.h"
-#include "editor/editor_settings.h"
 #include "editor/editor_string_names.h"
-#include "editor/filesystem_dock.h"
+#include "editor/file_system/editor_file_system.h"
+#include "editor/file_system/editor_paths.h"
+#include "editor/inspector/editor_resource_preview.h"
+#include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/center_container.h"
 #include "scene/gui/check_button.h"
@@ -265,7 +265,7 @@ QuickOpenResultContainer::QuickOpenResultContainer() {
 		fuzzy_search_toggle = memnew(CheckButton);
 		style_button(fuzzy_search_toggle);
 		fuzzy_search_toggle->set_text(TTR("Fuzzy Search"));
-		fuzzy_search_toggle->set_tooltip_text(TTRC("Include inexact matches or matches starting in the middle of a filename, instead of only exact matches from the beginning."));
+		fuzzy_search_toggle->set_tooltip_text(TTRC("Include approximate matches."));
 		fuzzy_search_toggle->connect(SceneStringName(toggled), callable_mp(this, &QuickOpenResultContainer::_toggle_fuzzy_search));
 		bottom_bar->add_child(fuzzy_search_toggle);
 
@@ -521,19 +521,28 @@ void QuickOpenResultContainer::update_results() {
 }
 
 void QuickOpenResultContainer::_use_default_candidates() {
+	HashSet<String> existing_paths;
 	Vector<QuickOpenResultCandidate> *history = _get_history();
 	if (history) {
 		candidates.append_array(*history);
+		for (const QuickOpenResultCandidate &candi : *history) {
+			existing_paths.insert(candi.file_path);
+		}
 	}
-	int count = candidates.size();
+	int i = candidates.size();
+
 	candidates.resize(MIN(max_total_results, filepaths.size()));
+	QuickOpenResultCandidate *candidates_w = candidates.ptrw();
+	int count = candidates.size();
+
 	for (const String &filepath : filepaths) {
-		if (count >= max_total_results) {
+		if (i >= count) {
 			break;
 		}
-		if (!history || !history_set.has(filepath)) {
-			_setup_candidate(candidates.write[count++], filepath);
+		if (existing_paths.has(filepath)) {
+			continue;
 		}
+		_setup_candidate(candidates_w[i++], filepath);
 	}
 }
 

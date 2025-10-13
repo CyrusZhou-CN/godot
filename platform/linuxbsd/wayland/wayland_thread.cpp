@@ -30,6 +30,8 @@
 
 #include "wayland_thread.h"
 
+#include "core/config/engine.h"
+
 #ifdef WAYLAND_ENABLED
 
 #ifdef __FreeBSD__
@@ -101,7 +103,7 @@ Vector<uint8_t> WaylandThread::_read_fd(int fd) {
 		data.resize(bytes_read + chunk_size);
 	}
 
-	return data;
+	return Vector<uint8_t>(data);
 }
 
 // Based on the wayland book's shared memory boilerplate (PD/CC0).
@@ -574,6 +576,12 @@ void WaylandThread::_wl_registry_on_global(void *data, struct wl_registry *wl_re
 		return;
 	}
 
+	if (strcmp(interface, xdg_toplevel_icon_manager_v1_interface.name) == 0) {
+		registry->xdg_toplevel_icon_manager = (struct xdg_toplevel_icon_manager_v1 *)wl_registry_bind(wl_registry, name, &xdg_toplevel_icon_manager_v1_interface, 1);
+		registry->xdg_toplevel_icon_manager_name = name;
+		return;
+	}
+
 	if (strcmp(interface, xdg_activation_v1_interface.name) == 0) {
 		registry->xdg_activation = (struct xdg_activation_v1 *)wl_registry_bind(wl_registry, name, &xdg_activation_v1_interface, 1);
 		registry->xdg_activation_name = name;
@@ -814,6 +822,25 @@ void WaylandThread::_wl_registry_on_global_remove(void *data, struct wl_registry
 		}
 
 		registry->xdg_system_bell_name = 0;
+
+		return;
+	}
+
+	if (name == registry->xdg_toplevel_icon_manager_name) {
+		if (registry->xdg_toplevel_icon_manager) {
+			xdg_toplevel_icon_manager_v1_destroy(registry->xdg_toplevel_icon_manager);
+			registry->xdg_toplevel_icon_manager = nullptr;
+		}
+
+		if (registry->wayland_thread->xdg_icon) {
+			xdg_toplevel_icon_v1_destroy(registry->wayland_thread->xdg_icon);
+		}
+
+		if (registry->wayland_thread->icon_buffer) {
+			wl_buffer_destroy(registry->wayland_thread->icon_buffer);
+		}
+
+		registry->xdg_toplevel_icon_manager_name = 0;
 
 		return;
 	}
@@ -1595,6 +1622,10 @@ void WaylandThread::_wl_pointer_on_enter(void *data, struct wl_pointer *wl_point
 	seat_state_update_cursor(ss);
 
 	DEBUG_LOG_WAYLAND_THREAD(vformat("Pointer entered window %d.", ws->id));
+
+	if (wl_pointer_get_version(wl_pointer) < WL_POINTER_FRAME_SINCE_VERSION) {
+		_wl_pointer_on_frame(data, wl_pointer);
+	}
 }
 
 void WaylandThread::_wl_pointer_on_leave(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface) {
@@ -1618,6 +1649,10 @@ void WaylandThread::_wl_pointer_on_leave(void *data, struct wl_pointer *wl_point
 	pd.pressed_button_mask.clear();
 
 	DEBUG_LOG_WAYLAND_THREAD(vformat("Pointer left window %d.", id));
+
+	if (wl_pointer_get_version(wl_pointer) < WL_POINTER_FRAME_SINCE_VERSION) {
+		_wl_pointer_on_frame(data, wl_pointer);
+	}
 }
 
 void WaylandThread::_wl_pointer_on_motion(void *data, struct wl_pointer *wl_pointer, uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y) {
@@ -1630,6 +1665,10 @@ void WaylandThread::_wl_pointer_on_motion(void *data, struct wl_pointer *wl_poin
 	pd.position.y = wl_fixed_to_double(surface_y);
 
 	pd.motion_time = time;
+
+	if (wl_pointer_get_version(wl_pointer) < WL_POINTER_FRAME_SINCE_VERSION) {
+		_wl_pointer_on_frame(data, wl_pointer);
+	}
 }
 
 void WaylandThread::_wl_pointer_on_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
@@ -1677,6 +1716,10 @@ void WaylandThread::_wl_pointer_on_button(void *data, struct wl_pointer *wl_poin
 
 	pd.button_time = time;
 	pd.button_serial = serial;
+
+	if (wl_pointer_get_version(wl_pointer) < WL_POINTER_FRAME_SINCE_VERSION) {
+		_wl_pointer_on_frame(data, wl_pointer);
+	}
 }
 
 void WaylandThread::_wl_pointer_on_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value) {
@@ -1696,6 +1739,10 @@ void WaylandThread::_wl_pointer_on_axis(void *data, struct wl_pointer *wl_pointe
 	}
 
 	pd.button_time = time;
+
+	if (wl_pointer_get_version(wl_pointer) < WL_POINTER_FRAME_SINCE_VERSION) {
+		_wl_pointer_on_frame(data, wl_pointer);
+	}
 }
 
 void WaylandThread::_wl_pointer_on_frame(void *data, struct wl_pointer *wl_pointer) {
@@ -1728,15 +1775,27 @@ void WaylandThread::_wl_pointer_on_frame(void *data, struct wl_pointer *wl_point
 		}
 	}
 
-	if (pd.pointed_id == DisplayServer::INVALID_WINDOW_ID) {
+	WindowState *ws = nullptr;
+
+	// NOTE: At least on sway, with wl_pointer version 5 or greater,
+	// wl_pointer::leave might be emitted with other events (like
+	// wl_pointer::button) within the same wl_pointer::frame. Because of this, we
+	// need to account for when the currently pointed window might be invalid
+	// (third-party or even none) and fall back to the old one.
+	if (pd.pointed_id != DisplayServer::INVALID_WINDOW_ID) {
+		ws = ss->wayland_thread->window_get_state(pd.pointed_id);
+		ERR_FAIL_NULL(ws);
+	} else if (old_pd.pointed_id != DisplayServer::INVALID_WINDOW_ID) {
+		ws = ss->wayland_thread->window_get_state(old_pd.pointed_id);
+		ERR_FAIL_NULL(ws);
+	}
+
+	if (ws == nullptr) {
 		// We're probably on a decoration or some other third-party thing. Let's
 		// "commit" the data and call it a day.
 		old_pd = pd;
 		return;
 	}
-
-	WindowState *ws = ss->wayland_thread->window_get_state(pd.pointed_id);
-	ERR_FAIL_NULL(ws);
 
 	double scale = window_state_get_scale_factor(ws);
 
@@ -3509,6 +3568,13 @@ void WaylandThread::window_create(DisplayServer::WindowID p_window_id, int p_wid
 		ws.libdecor_frame = libdecor_decorate(libdecor_context, ws.wl_surface, (struct libdecor_frame_interface *)&libdecor_frame_interface, &ws);
 		libdecor_frame_map(ws.libdecor_frame);
 
+		if (registry.xdg_toplevel_icon_manager) {
+			xdg_toplevel *toplevel = libdecor_frame_get_xdg_toplevel(ws.libdecor_frame);
+			if (toplevel != nullptr) {
+				xdg_toplevel_icon_manager_v1_set_icon(registry.xdg_toplevel_icon_manager, toplevel, xdg_icon);
+			}
+		}
+
 		decorated = true;
 	}
 #endif
@@ -3528,6 +3594,10 @@ void WaylandThread::window_create(DisplayServer::WindowID p_window_id, int p_wid
 			zxdg_toplevel_decoration_v1_add_listener(ws.xdg_toplevel_decoration, &xdg_toplevel_decoration_listener, &ws);
 
 			decorated = true;
+		}
+
+		if (registry.xdg_toplevel_icon_manager) {
+			xdg_toplevel_icon_manager_v1_set_icon(registry.xdg_toplevel_icon_manager, ws.xdg_toplevel, xdg_icon);
 		}
 	}
 
@@ -3817,7 +3887,7 @@ void WaylandThread::window_set_max_size(DisplayServer::WindowID p_window_id, con
 	ERR_FAIL_COND(!windows.has(p_window_id));
 	WindowState &ws = windows[p_window_id];
 
-	Vector2i logical_max_size = p_size / window_state_get_scale_factor(&ws);
+	Vector2i logical_max_size = scale_vector2i(p_size, 1 / window_state_get_scale_factor(&ws));
 
 	if (ws.wl_surface && ws.xdg_toplevel) {
 		xdg_toplevel_set_max_size(ws.xdg_toplevel, logical_max_size.width, logical_max_size.height);
@@ -3836,7 +3906,7 @@ void WaylandThread::window_set_min_size(DisplayServer::WindowID p_window_id, con
 	ERR_FAIL_COND(!windows.has(p_window_id));
 	WindowState &ws = windows[p_window_id];
 
-	Size2i logical_min_size = p_size / window_state_get_scale_factor(&ws);
+	Size2i logical_min_size = scale_vector2i(p_size, 1 / window_state_get_scale_factor(&ws));
 
 	if (ws.wl_surface && ws.xdg_toplevel) {
 		xdg_toplevel_set_min_size(ws.xdg_toplevel, logical_min_size.width, logical_min_size.height);
@@ -4078,6 +4148,81 @@ void WaylandThread::window_set_app_id(DisplayServer::WindowID p_window_id, const
 	if (ws.xdg_toplevel) {
 		xdg_toplevel_set_app_id(ws.xdg_toplevel, p_app_id.utf8().get_data());
 		return;
+	}
+}
+
+void WaylandThread::set_icon(const Ref<Image> &p_icon) {
+	ERR_FAIL_COND(p_icon.is_null());
+
+	Size2i icon_size = p_icon->get_size();
+	ERR_FAIL_COND(icon_size.width != icon_size.height);
+
+	if (!registry.xdg_toplevel_icon_manager) {
+		return;
+	}
+
+	if (xdg_icon) {
+		xdg_toplevel_icon_v1_destroy(xdg_icon);
+	}
+
+	if (icon_buffer) {
+		wl_buffer_destroy(icon_buffer);
+	}
+
+	// NOTE: The stride is the width of the icon in bytes.
+	uint32_t icon_stride = icon_size.width * 4;
+	uint32_t data_size = icon_stride * icon_size.height;
+
+	// We need a shared memory object file descriptor in order to create a
+	// wl_buffer through wl_shm.
+	int fd = WaylandThread::_allocate_shm_file(data_size);
+	ERR_FAIL_COND(fd == -1);
+
+	uint32_t *buffer_data = (uint32_t *)mmap(nullptr, data_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+	// Create the Wayland buffer.
+	struct wl_shm_pool *shm_pool = wl_shm_create_pool(registry.wl_shm, fd, data_size);
+	icon_buffer = wl_shm_pool_create_buffer(shm_pool, 0, icon_size.width, icon_size.height, icon_stride, WL_SHM_FORMAT_ARGB8888);
+	wl_shm_pool_destroy(shm_pool);
+
+	// Fill the cursor buffer with the image data.
+	for (uint32_t index = 0; index < (uint32_t)(icon_size.width * icon_size.height); index++) {
+		int row_index = index / icon_size.width;
+		int column_index = (index % icon_size.width);
+
+		buffer_data[index] = p_icon->get_pixel(column_index, row_index).to_argb32();
+
+		// Wayland buffers, unless specified, require associated alpha, so we'll just
+		// associate the alpha in-place.
+		uint8_t *pixel_data = (uint8_t *)&buffer_data[index];
+		pixel_data[0] = pixel_data[0] * pixel_data[3] / 255;
+		pixel_data[1] = pixel_data[1] * pixel_data[3] / 255;
+		pixel_data[2] = pixel_data[2] * pixel_data[3] / 255;
+	}
+
+	xdg_icon = xdg_toplevel_icon_manager_v1_create_icon(registry.xdg_toplevel_icon_manager);
+	xdg_toplevel_icon_v1_add_buffer(xdg_icon, icon_buffer, icon_size.width);
+
+	if (Engine::get_singleton()->is_editor_hint() || Engine::get_singleton()->is_project_manager_hint()) {
+		// Setting a name allows the godot icon to be overridden by a system theme.
+		// We only want the project manager and editor to get themed,
+		// Games will get icons with the protocol and themed icons with .desktop entries.
+		// NOTE: should be synced with the icon name in misc/dist/linuxbsd/Godot.desktop
+		xdg_toplevel_icon_v1_set_name(xdg_icon, "godot");
+	}
+
+	for (KeyValue<DisplayServer::WindowID, WindowState> &pair : windows) {
+		WindowState &ws = pair.value;
+#ifdef LIBDECOR_ENABLED
+		if (ws.libdecor_frame) {
+			xdg_toplevel *toplevel = libdecor_frame_get_xdg_toplevel(ws.libdecor_frame);
+			ERR_FAIL_NULL(toplevel);
+			xdg_toplevel_icon_manager_v1_set_icon(registry.xdg_toplevel_icon_manager, toplevel, xdg_icon);
+		}
+#endif
+		if (ws.xdg_toplevel) {
+			xdg_toplevel_icon_manager_v1_set_icon(registry.xdg_toplevel_icon_manager, ws.xdg_toplevel, xdg_icon);
+		}
 	}
 }
 
@@ -4331,6 +4476,10 @@ Error WaylandThread::init() {
 
 	if (!registry.wp_fifo_manager_name) {
 		WARN_PRINT("FIFO protocol not found! Frame pacing will be degraded.");
+	}
+
+	if (!registry.xdg_toplevel_icon_manager_name) {
+		WARN_PRINT("xdg-toplevel-icon protocol not found! Cannot set window icon.");
 	}
 
 	// Wait for seat capabilities.
@@ -4998,6 +5147,18 @@ void WaylandThread::destroy() {
 
 	if (registry.xdg_system_bell) {
 		xdg_system_bell_v1_destroy(registry.xdg_system_bell);
+	}
+
+	if (registry.xdg_toplevel_icon_manager) {
+		xdg_toplevel_icon_manager_v1_destroy(registry.xdg_toplevel_icon_manager);
+
+		if (xdg_icon) {
+			xdg_toplevel_icon_v1_destroy(xdg_icon);
+		}
+
+		if (icon_buffer) {
+			wl_buffer_destroy(icon_buffer);
+		}
 	}
 
 	if (registry.xdg_decoration_manager) {

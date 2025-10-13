@@ -32,7 +32,7 @@
 
 #include "scene/main/viewport.h"
 #include "scene/resources/theme.h"
-#include "servers/display_server.h"
+#include "servers/display/display_server.h"
 
 class Font;
 class Shortcut;
@@ -120,7 +120,7 @@ private:
 	bool initialized = false;
 
 	String title;
-	String tr_title;
+	String displayed_title;
 	mutable int current_screen = 0;
 	mutable Point2i position;
 	mutable Size2i size = Size2i(DEFAULT_WINDOW_SIZE, DEFAULT_WINDOW_SIZE);
@@ -252,6 +252,8 @@ private:
 	void _update_mouse_over(Vector2 p_pos) override;
 	void _mouse_leave_viewport() override;
 
+	void _update_displayed_title();
+
 	Ref<Shortcut> debugger_stop_shortcut;
 
 	static int root_layout_direction;
@@ -296,7 +298,7 @@ public:
 
 	void set_title(const String &p_title);
 	String get_title() const;
-	String get_translated_title() const;
+	String get_displayed_title() const;
 
 	void set_initial_position(WindowInitialPosition p_initial_position);
 	WindowInitialPosition get_initial_position() const;
@@ -329,6 +331,8 @@ public:
 
 	void set_flag(Flags p_flag, bool p_enabled);
 	bool get_flag(Flags p_flag) const;
+
+	bool is_popup() const;
 
 	bool is_maximize_allowed() const;
 
@@ -397,6 +401,7 @@ public:
 	Window *get_exclusive_child() const { return exclusive_child; }
 	HashSet<Window *> get_transient_children() const { return transient_children; }
 	Window *get_parent_visible_window() const;
+	Window *get_non_popup_window() const;
 	Viewport *get_parent_viewport() const;
 
 	virtual void popup(const Rect2i &p_screen_rect = Rect2i());
@@ -417,6 +422,7 @@ public:
 
 	void grab_focus();
 	bool has_focus() const;
+	bool has_focus_or_active_popup() const;
 
 	void start_drag();
 	void start_resize(DisplayServer::WindowResizeEdge p_edge);
@@ -509,6 +515,7 @@ public:
 	virtual Transform2D get_final_transform() const override;
 	virtual Transform2D get_screen_transform_internal(bool p_absolute_position = false) const override;
 	virtual Transform2D get_popup_base_transform() const override;
+	virtual Transform2D get_popup_base_transform_native() const override;
 	virtual Viewport *get_section_root_viewport() const override;
 	virtual bool is_attached_in_viewport() const override;
 

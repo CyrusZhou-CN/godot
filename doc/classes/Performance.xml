@@ -154,6 +154,7 @@
 		</constant>
 		<constant name="OBJECT_ORPHAN_NODE_COUNT" value="10" enum="Monitor">
 			Number of orphan nodes, i.e. nodes which are not parented to a node of the scene tree. [i]Lower is better.[/i]
+			[b]Note:[/b] This is only available in debug mode and will always return [code]0[/code] when used in a project exported in release mode.
 		</constant>
 		<constant name="RENDER_TOTAL_OBJECTS_IN_FRAME" value="11" enum="Monitor">
 			The total number of objects in the last rendered frame. This metric doesn't include culled objects (either via hiding nodes, frustum culling or occlusion culling). [i]Lower is better.[/i]
@@ -231,7 +232,7 @@
 			Number of pipeline compilations that were triggered by loading meshes. These compilations will show up as longer loading times the first time a user runs the game and the pipeline is required.
 		</constant>
 		<constant name="PIPELINE_COMPILATIONS_SURFACE" value="36" enum="Monitor">
-			Number of pipeline compilations that were triggered by building the surface cache before rendering the scene. These compilations will show up as a stutter when loading an scene the first time a user runs the game and the pipeline is required.
+			Number of pipeline compilations that were triggered by building the surface cache before rendering the scene. These compilations will show up as a stutter when loading a scene the first time a user runs the game and the pipeline is required.
 		</constant>
 		<constant name="PIPELINE_COMPILATIONS_DRAW" value="37" enum="Monitor">
 			Number of pipeline compilations that were triggered while drawing the scene. These compilations will show up as stutters during gameplay the first time a user runs the game and the pipeline is required.

@@ -32,6 +32,7 @@
 
 #include "core/config/project_settings.h"
 #include "core/io/dir_access.h"
+#include "core/io/file_access.h"
 #include "core/os/keyboard.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/check_box.h"
@@ -80,9 +81,9 @@ void FileDialog::_native_popup() {
 	DisplayServer::WindowID wid = w ? w->get_window_id() : DisplayServer::INVALID_WINDOW_ID;
 
 	if (DisplayServer::get_singleton()->has_feature(DisplayServer::FEATURE_NATIVE_DIALOG_FILE_EXTRA)) {
-		DisplayServer::get_singleton()->file_dialog_with_options_show(get_translated_title(), ProjectSettings::get_singleton()->globalize_path(full_dir), root, filename_edit->get_text().get_file(), show_hidden_files, DisplayServer::FileDialogMode(mode), processed_filters, _get_options(), callable_mp(this, &FileDialog::_native_dialog_cb_with_options), wid);
+		DisplayServer::get_singleton()->file_dialog_with_options_show(get_displayed_title(), ProjectSettings::get_singleton()->globalize_path(full_dir), root, filename_edit->get_text().get_file(), show_hidden_files, DisplayServer::FileDialogMode(mode), processed_filters, _get_options(), callable_mp(this, &FileDialog::_native_dialog_cb_with_options), wid);
 	} else {
-		DisplayServer::get_singleton()->file_dialog_show(get_translated_title(), ProjectSettings::get_singleton()->globalize_path(full_dir), filename_edit->get_text().get_file(), show_hidden_files, DisplayServer::FileDialogMode(mode), processed_filters, callable_mp(this, &FileDialog::_native_dialog_cb), wid);
+		DisplayServer::get_singleton()->file_dialog_show(get_displayed_title(), ProjectSettings::get_singleton()->globalize_path(full_dir), filename_edit->get_text().get_file(), show_hidden_files, DisplayServer::FileDialogMode(mode), processed_filters, callable_mp(this, &FileDialog::_native_dialog_cb), wid);
 	}
 }
 
@@ -421,9 +422,9 @@ void FileDialog::_save_confirm_pressed() {
 void FileDialog::_post_popup() {
 	ConfirmationDialog::_post_popup();
 	if (mode == FILE_MODE_SAVE_FILE) {
-		filename_edit->grab_focus();
+		filename_edit->grab_focus(true);
 	} else {
-		file_list->grab_focus();
+		file_list->grab_focus(true);
 	}
 
 	set_process_shortcut_input(true);
@@ -540,7 +541,7 @@ void FileDialog::_action_pressed() {
 			return;
 		}
 
-		if (dir_access->file_exists(f) || dir_access->is_bundle(f)) {
+		if (customization_flags[CUSTOMIZATION_OVERWRITE_WARNING] && (dir_access->file_exists(f) || dir_access->is_bundle(f))) {
 			confirm_save->set_text(vformat(atr(ETR("File \"%s\" already exists.\nDo you want to overwrite it?")), f));
 			confirm_save->popup_centered(Size2(250, 80));
 		} else {
@@ -575,6 +576,24 @@ bool FileDialog::_is_open_should_be_disabled() {
 		}
 	}
 	return false;
+}
+
+void FileDialog::_thumbnail_callback(const Ref<Texture2D> &p_texture, const String &p_path) {
+	if (display_mode == DISPLAY_LIST || p_texture.is_null()) {
+		return;
+	}
+
+	if (!p_path.begins_with(full_dir)) {
+		return;
+	}
+
+	const String file_name = p_path.get_file();
+	for (int i = 0; i < file_list->get_item_count(); i++) {
+		if (file_list->get_item_text(i) == file_name) {
+			file_list->set_item_icon(i, p_texture);
+			break;
+		}
+	}
 }
 
 void FileDialog::_go_up() {
@@ -633,6 +652,11 @@ void FileDialog::deselect_all() {
 int FileDialog::_get_selected_file_idx() {
 	const PackedInt32Array selected = file_list->get_selected_items();
 	return selected.is_empty() ? -1 : selected[0];
+}
+
+String FileDialog::_get_item_path(int p_idx) const {
+	const Dictionary meta = file_list->get_item_metadata(p_idx);
+	return ProjectSettings::get_singleton()->globalize_path(dir_access->get_current_dir().path_join(meta["name"]));
 }
 
 void FileDialog::_file_list_multi_selected(int p_item, bool p_selected) {
@@ -697,13 +721,32 @@ void FileDialog::update_file_name() {
 }
 
 void FileDialog::_item_menu_id_pressed(int p_option) {
+	int selected = _get_selected_file_idx();
 	switch (p_option) {
+		case ITEM_MENU_COPY_PATH: {
+			if (selected > -1) {
+				DisplayServer::get_singleton()->clipboard_set(_get_item_path(selected));
+			}
+		} break;
+
+		case ITEM_MENU_DELETE: {
+			if (selected > -1) {
+				delete_dialog->popup_centered(Size2(250, 80));
+			}
+		} break;
+
+		case ITEM_MENU_REFRESH: {
+			invalidate();
+		} break;
+
+		case ITEM_MENU_NEW_FOLDER: {
+			_make_dir();
+		} break;
+
 		case ITEM_MENU_SHOW_IN_EXPLORER: {
 			String path;
-			int selected = _get_selected_file_idx();
 			if (selected > -1) {
-				Dictionary d = file_list->get_item_metadata(selected);
-				path = ProjectSettings::get_singleton()->globalize_path(dir_access->get_current_dir().path_join(d["name"]));
+				path = _get_item_path(selected);
 			} else {
 				path = ProjectSettings::get_singleton()->globalize_path(dir_access->get_current_dir());
 			}
@@ -712,12 +755,11 @@ void FileDialog::_item_menu_id_pressed(int p_option) {
 		} break;
 
 		case ITEM_MENU_SHOW_BUNDLE_CONTENT: {
-			int selected = _get_selected_file_idx();
 			if (selected == -1) {
 				return;
 			}
-			Dictionary d = file_list->get_item_metadata(selected);
-			_change_dir(d["name"]);
+			Dictionary meta = file_list->get_item_metadata(selected);
+			_change_dir(meta["name"]);
 			if (mode == FILE_MODE_OPEN_FILE || mode == FILE_MODE_OPEN_FILES || mode == FILE_MODE_OPEN_DIR || mode == FILE_MODE_OPEN_ANY) {
 				filename_edit->set_text("");
 			}
@@ -728,15 +770,7 @@ void FileDialog::_item_menu_id_pressed(int p_option) {
 
 void FileDialog::_empty_clicked(const Vector2 &p_pos, MouseButton p_button) {
 	if (p_button == MouseButton::RIGHT) {
-		item_menu->clear();
-#if !defined(ANDROID_ENABLED) && !defined(WEB_ENABLED)
-		// Opening the system file manager is not supported on the Android and web editors.
-		item_menu->add_item(ETR("Open in File Manager"), ITEM_MENU_SHOW_IN_EXPLORER);
-
-		item_menu->set_position(file_list->get_screen_position() + p_pos);
-		item_menu->reset_size();
-		item_menu->popup();
-#endif
+		_popup_menu(p_pos, -1);
 	} else if (p_button == MouseButton::LEFT) {
 		deselect_all();
 	}
@@ -744,20 +778,47 @@ void FileDialog::_empty_clicked(const Vector2 &p_pos, MouseButton p_button) {
 
 void FileDialog::_item_clicked(int p_item, const Vector2 &p_pos, MouseButton p_button) {
 	if (p_button == MouseButton::RIGHT) {
-		item_menu->clear();
-#if !defined(ANDROID_ENABLED) && !defined(WEB_ENABLED)
-		// Opening the system file manager is not supported on the Android and web editors.
-		Dictionary d = file_list->get_item_metadata(p_item);
-		if (d["bundle"]) {
-			item_menu->add_item(ETR("Show Package Contents"), ITEM_MENU_SHOW_BUNDLE_CONTENT);
-		}
-		item_menu->add_item(ETR("Open in File Manager"), ITEM_MENU_SHOW_IN_EXPLORER);
-
-		item_menu->set_position(file_list->get_screen_position() + p_pos);
-		item_menu->reset_size();
-		item_menu->popup();
-#endif
+		_popup_menu(p_pos, p_item);
 	}
+}
+
+void FileDialog::_popup_menu(const Vector2 &p_pos, int p_for_item) {
+	item_menu->clear();
+
+	if (p_for_item > -1) {
+		item_menu->add_item(ETR("Copy Path"), ITEM_MENU_COPY_PATH);
+		if (customization_flags[CUSTOMIZATION_DELETE]) {
+			item_menu->add_item(ETR("Delete"), ITEM_MENU_DELETE);
+		}
+	} else {
+		if (can_create_folders) {
+			item_menu->add_item(ETR("New Folder..."), ITEM_MENU_NEW_FOLDER);
+		}
+		item_menu->add_item(ETR("Refresh"), ITEM_MENU_REFRESH);
+	}
+
+#if !defined(ANDROID_ENABLED) && !defined(WEB_ENABLED)
+	// Opening the system file manager is not supported on the Android and web editors.
+	item_menu->add_separator();
+
+	Dictionary meta;
+	if (p_for_item > -1) {
+		meta = file_list->get_item_metadata(p_for_item);
+	}
+
+	item_menu->add_item((p_for_item == -1 || meta["dir"]) ? ETR("Open in File Manager") : ETR("Show in File Manager"), ITEM_MENU_SHOW_IN_EXPLORER);
+	if (meta["bundle"]) {
+		item_menu->add_item(ETR("Show Package Contents"), ITEM_MENU_SHOW_BUNDLE_CONTENT);
+	}
+#endif
+
+	if (item_menu->get_item_count() == 0) {
+		return;
+	}
+
+	item_menu->set_position(file_list->get_screen_position() + p_pos);
+	item_menu->reset_size();
+	item_menu->popup();
 }
 
 void FileDialog::update_file_list() {
@@ -778,7 +839,7 @@ void FileDialog::update_file_list() {
 		file_list->set_max_columns(1);
 		file_list->set_max_text_lines(1);
 		file_list->set_fixed_column_width(0);
-		file_list->set_fixed_icon_size(Size2());
+		file_list->set_fixed_icon_size(theme_cache.file->get_size());
 	}
 
 	dir_access->list_dir_begin();
@@ -882,9 +943,9 @@ void FileDialog::update_file_list() {
 
 	for (const DirInfo &info : filtered_dirs) {
 		if (display_mode == DISPLAY_THUMBNAILS) {
-			file_list->add_item(info.name, theme_cache.folder_thumbnail);
+			file_list->add_item(info.name, info.bundle ? theme_cache.file_thumbnail : theme_cache.folder_thumbnail);
 		} else {
-			file_list->add_item(info.name, theme_cache.folder);
+			file_list->add_item(info.name, info.bundle ? theme_cache.file : theme_cache.folder);
 		}
 		file_list->set_item_icon_modulate(-1, theme_cache.folder_icon_color);
 
@@ -948,13 +1009,44 @@ void FileDialog::update_file_list() {
 
 	for (const FileInfo &info : filtered_files) {
 		file_list->add_item(info.name);
-		if (get_icon_func) {
-			Ref<Texture2D> icon = get_icon_func(base_dir.path_join(info.name));
+		const String path = base_dir.path_join(info.name);
+
+		if (display_mode == DISPLAY_LIST) {
+			Ref<Texture2D> icon;
+			if (get_icon_callback.is_valid()) {
+				const Variant &v = path;
+				const Variant *argptrs[1] = { &v };
+				Variant vicon;
+
+				Callable::CallError ce;
+				get_icon_callback.callp(argptrs, 1, vicon, ce);
+				if (unlikely(ce.error != Callable::CallError::CALL_OK)) {
+					ERR_PRINT(vformat("Error calling FileDialog's icon callback: %s.", Variant::get_callable_error_text(get_icon_callback, argptrs, 1, ce)));
+				}
+				icon = vicon;
+			}
+			if (icon.is_null()) {
+				icon = theme_cache.file;
+			}
 			file_list->set_item_icon(-1, icon);
-		} else if (display_mode == DISPLAY_THUMBNAILS) {
-			file_list->set_item_icon(-1, theme_cache.file_thumbnail);
-		} else {
-			file_list->set_item_icon(-1, theme_cache.file);
+		} else { // DISPLAY_THUMBNAILS
+			Ref<Texture2D> icon;
+			if (get_thumbnail_callback.is_valid()) {
+				const Variant &v = path;
+				const Variant *argptrs[1] = { &v };
+				Variant vicon;
+
+				Callable::CallError ce;
+				get_thumbnail_callback.callp(argptrs, 1, vicon, ce);
+				if (unlikely(ce.error != Callable::CallError::CALL_OK)) {
+					ERR_PRINT(vformat("Error calling FileDialog's thumbnail callback: %s.", Variant::get_callable_error_text(get_thumbnail_callback, argptrs, 1, ce)));
+				}
+				icon = vicon;
+			}
+			if (icon.is_null()) {
+				icon = theme_cache.file;
+			}
+			file_list->set_item_icon(-1, icon);
 		}
 		file_list->set_item_icon_modulate(-1, theme_cache.file_icon_color);
 
@@ -1012,6 +1104,11 @@ void FileDialog::_file_list_select_first() {
 		file_list->select(0);
 		_file_list_selected(0);
 	}
+}
+
+void FileDialog::_delete_confirm() {
+	OS::get_singleton()->move_to_trash(_get_item_path(_get_selected_file_idx()));
+	invalidate();
 }
 
 void FileDialog::_filename_filter_selected() {
@@ -1335,6 +1432,64 @@ FileDialog::DisplayMode FileDialog::get_display_mode() const {
 	return display_mode;
 }
 
+void FileDialog::set_favorite_list(const PackedStringArray &p_favorites) {
+	ERR_FAIL_COND_MSG(Thread::get_caller_id() != Thread::get_main_id(), "Setting favorite list can only be done on the main thread.");
+
+	global_favorites.clear();
+	global_favorites.reserve(p_favorites.size());
+	for (const String &fav : p_favorites) {
+		if (fav.ends_with("/")) {
+			global_favorites.push_back(fav);
+		} else {
+			global_favorites.push_back(fav + "/");
+		}
+	}
+}
+
+PackedStringArray FileDialog::get_favorite_list() {
+	PackedStringArray ret;
+	ERR_FAIL_COND_V_MSG(Thread::get_caller_id() != Thread::get_main_id(), ret, "Getting favorite list can only be done on the main thread.");
+
+	ret.resize(global_favorites.size());
+
+	String *fav_write = ret.ptrw();
+	int i = 0;
+	for (const String &fav : global_favorites) {
+		fav_write[i] = fav;
+		i++;
+	}
+	return ret;
+}
+
+void FileDialog::set_recent_list(const PackedStringArray &p_recents) {
+	ERR_FAIL_COND_MSG(Thread::get_caller_id() != Thread::get_main_id(), "Setting recent list can only be done on the main thread.");
+
+	global_recents.clear();
+	global_recents.reserve(p_recents.size());
+	for (const String &recent : p_recents) {
+		if (recent.ends_with("/")) {
+			global_recents.push_back(recent);
+		} else {
+			global_recents.push_back(recent + "/");
+		}
+	}
+}
+
+PackedStringArray FileDialog::get_recent_list() {
+	PackedStringArray ret;
+	ERR_FAIL_COND_V_MSG(Thread::get_caller_id() != Thread::get_main_id(), ret, "Getting recent list can only be done on the main thread.");
+
+	ret.resize(global_recents.size());
+
+	String *recent_write = ret.ptrw();
+	int i = 0;
+	for (const String &recent : global_recents) {
+		recent_write[i] = recent;
+		i++;
+	}
+	return ret;
+}
+
 void FileDialog::set_customization_flag_enabled(Customization p_flag, bool p_enabled) {
 	ERR_FAIL_INDEX(p_flag, CUSTOMIZATION_MAX);
 	if (customization_flags[p_flag] == p_enabled) {
@@ -1362,7 +1517,7 @@ void FileDialog::set_access(Access p_access) {
 		case ACCESS_FILESYSTEM: {
 			dir_access = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
 #ifdef ANDROID_ENABLED
-			set_root_subfolder(OS::get_singleton()->get_system_dir(OS::SYSTEM_DIR_DESKTOP));
+			set_current_dir(OS::get_singleton()->get_system_dir(OS::SYSTEM_DIR_DESKTOP));
 #endif
 		} break;
 		case ACCESS_RESOURCES: {
@@ -1411,7 +1566,8 @@ void FileDialog::_setup_button(Button *p_button, const Ref<Texture2D> &p_icon) {
 }
 
 void FileDialog::_update_make_dir_visible() {
-	make_dir_container->set_visible(customization_flags[CUSTOMIZATION_CREATE_FOLDER] && mode != FILE_MODE_OPEN_FILE && mode != FILE_MODE_OPEN_FILES);
+	can_create_folders = customization_flags[CUSTOMIZATION_CREATE_FOLDER] && mode != FILE_MODE_OPEN_FILE && mode != FILE_MODE_OPEN_FILES;
+	make_dir_container->set_visible(can_create_folders);
 }
 
 FileDialog::Access FileDialog::get_access() const {
@@ -1921,6 +2077,13 @@ void FileDialog::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_customization_flag_enabled", "flag"), &FileDialog::is_customization_flag_enabled);
 	ClassDB::bind_method(D_METHOD("deselect_all"), &FileDialog::deselect_all);
 
+	ClassDB::bind_static_method("FileDialog", D_METHOD("set_favorite_list", "favorites"), &FileDialog::set_favorite_list);
+	ClassDB::bind_static_method("FileDialog", D_METHOD("get_favorite_list"), &FileDialog::get_favorite_list);
+	ClassDB::bind_static_method("FileDialog", D_METHOD("set_recent_list", "recents"), &FileDialog::set_recent_list);
+	ClassDB::bind_static_method("FileDialog", D_METHOD("get_recent_list"), &FileDialog::get_recent_list);
+	ClassDB::bind_static_method("FileDialog", D_METHOD("set_get_icon_callback", "callback"), &FileDialog::set_get_icon_callback);
+	ClassDB::bind_static_method("FileDialog", D_METHOD("set_get_thumbnail_callback", "callback"), &FileDialog::set_get_thumbnail_callback);
+
 	ClassDB::bind_method(D_METHOD("invalidate"), &FileDialog::invalidate);
 
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "mode_overrides_title"), "set_mode_overrides_title", "is_mode_overriding_title");
@@ -1943,9 +2106,11 @@ void FileDialog::_bind_methods() {
 	ADD_PROPERTYI(PropertyInfo(Variant::BOOL, "favorites_enabled"), "set_customization_flag_enabled", "is_customization_flag_enabled", CUSTOMIZATION_FAVORITES);
 	ADD_PROPERTYI(PropertyInfo(Variant::BOOL, "recent_list_enabled"), "set_customization_flag_enabled", "is_customization_flag_enabled", CUSTOMIZATION_RECENT);
 	ADD_PROPERTYI(PropertyInfo(Variant::BOOL, "layout_toggle_enabled"), "set_customization_flag_enabled", "is_customization_flag_enabled", CUSTOMIZATION_LAYOUT);
+	ADD_PROPERTYI(PropertyInfo(Variant::BOOL, "overwrite_warning_enabled"), "set_customization_flag_enabled", "is_customization_flag_enabled", CUSTOMIZATION_OVERWRITE_WARNING);
+	ADD_PROPERTYI(PropertyInfo(Variant::BOOL, "deleting_enabled"), "set_customization_flag_enabled", "is_customization_flag_enabled", CUSTOMIZATION_DELETE);
 
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "current_dir", PROPERTY_HINT_DIR, "", PROPERTY_USAGE_NONE), "set_current_dir", "get_current_dir");
-	ADD_PROPERTY(PropertyInfo(Variant::STRING, "current_file", PROPERTY_HINT_FILE, "*", PROPERTY_USAGE_NONE), "set_current_file", "get_current_file");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "current_file", PROPERTY_HINT_FILE_PATH, "*", PROPERTY_USAGE_NONE), "set_current_file", "get_current_file");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "current_path", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "set_current_path", "get_current_path");
 
 	ADD_SIGNAL(MethodInfo("file_selected", PropertyInfo(Variant::STRING, "path")));
@@ -1973,6 +2138,8 @@ void FileDialog::_bind_methods() {
 	BIND_ENUM_CONSTANT(CUSTOMIZATION_FAVORITES);
 	BIND_ENUM_CONSTANT(CUSTOMIZATION_RECENT);
 	BIND_ENUM_CONSTANT(CUSTOMIZATION_LAYOUT);
+	BIND_ENUM_CONSTANT(CUSTOMIZATION_OVERWRITE_WARNING);
+	BIND_ENUM_CONSTANT(CUSTOMIZATION_DELETE);
 
 	BIND_THEME_ITEM(Theme::DATA_TYPE_CONSTANT, FileDialog, thumbnail_size);
 	BIND_THEME_ITEM(Theme::DATA_TYPE_ICON, FileDialog, parent_folder);
@@ -2035,7 +2202,7 @@ void FileDialog::set_show_filename_filter(bool p_show) {
 		filename_filter->grab_focus();
 	} else {
 		if (filename_filter->has_focus()) {
-			callable_mp((Control *)file_list, &Control::grab_focus).call_deferred();
+			callable_mp((Control *)file_list, &Control::grab_focus).call_deferred(false);
 		}
 	}
 	show_filename_filter = p_show;
@@ -2053,6 +2220,18 @@ bool FileDialog::is_showing_hidden_files() const {
 
 void FileDialog::set_default_show_hidden_files(bool p_show) {
 	default_show_hidden_files = p_show;
+}
+
+void FileDialog::set_default_display_mode(DisplayMode p_mode) {
+	default_display_mode = p_mode;
+}
+
+void FileDialog::set_get_icon_callback(const Callable &p_callback) {
+	get_icon_callback = p_callback;
+}
+
+void FileDialog::set_get_thumbnail_callback(const Callable &p_callback) {
+	get_thumbnail_callback = p_callback;
 }
 
 void FileDialog::set_use_native_dialog(bool p_native) {
@@ -2080,12 +2259,14 @@ FileDialog::FileDialog() {
 	set_hide_on_ok(false);
 	set_size(Size2(640, 360));
 	set_default_ok_text(ETR("Save")); // Default mode text.
+	thumbnail_callback = callable_mp(this, &FileDialog::_thumbnail_callback);
 
 	for (int i = 0; i < CUSTOMIZATION_MAX; i++) {
 		customization_flags[i] = true;
 	}
 
 	show_hidden_files = default_show_hidden_files;
+	display_mode = default_display_mode;
 	dir_access = DirAccess::create(DirAccess::ACCESS_RESOURCES);
 
 	main_vbox = memnew(VBoxContainer);
@@ -2096,20 +2277,17 @@ FileDialog::FileDialog() {
 
 	dir_prev = memnew(Button);
 	dir_prev->set_theme_type_variation(SceneStringName(FlatButton));
-	dir_prev->set_accessibility_name(ETR("Previous"));
 	dir_prev->set_tooltip_text(ETR("Go to previous folder."));
 	top_toolbar->add_child(dir_prev);
 	dir_prev->connect(SceneStringName(pressed), callable_mp(this, &FileDialog::_go_back));
 
 	dir_next = memnew(Button);
-	dir_next->set_accessibility_name(ETR("Next"));
 	dir_next->set_theme_type_variation(SceneStringName(FlatButton));
 	dir_next->set_tooltip_text(ETR("Go to next folder."));
 	top_toolbar->add_child(dir_next);
 	dir_next->connect(SceneStringName(pressed), callable_mp(this, &FileDialog::_go_forward));
 
 	dir_up = memnew(Button);
-	dir_up->set_accessibility_name(ETR("Parent Folder"));
 	dir_up->set_theme_type_variation(SceneStringName(FlatButton));
 	dir_up->set_tooltip_text(ETR("Go to parent folder."));
 	top_toolbar->add_child(dir_up);
@@ -2129,7 +2307,7 @@ FileDialog::FileDialog() {
 	top_toolbar->add_child(drives);
 
 	directory_edit = memnew(LineEdit);
-	directory_edit->set_accessibility_name(ETR("Directory Path"));
+	directory_edit->set_accessibility_name(ETR("Path:"));
 	directory_edit->set_structured_text_bidi_override(TextServer::STRUCTURED_TEXT_FILE);
 	directory_edit->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 	top_toolbar->add_child(directory_edit);
@@ -2140,15 +2318,13 @@ FileDialog::FileDialog() {
 
 	refresh_button = memnew(Button);
 	refresh_button->set_theme_type_variation(SceneStringName(FlatButton));
-	refresh_button->set_accessibility_name(ETR("Refresh"));
 	refresh_button->set_tooltip_text(ETR("Refresh files."));
 	top_toolbar->add_child(refresh_button);
 	refresh_button->connect(SceneStringName(pressed), callable_mp(this, &FileDialog::update_file_list));
 
 	favorite_button = memnew(Button);
 	favorite_button->set_theme_type_variation(SceneStringName(FlatButton));
-	favorite_button->set_accessibility_name(TTRC("(Un)favorite Folder"));
-	favorite_button->set_tooltip_text(TTRC("(Un)favorite current folder."));
+	favorite_button->set_tooltip_text(ETR("(Un)favorite current folder."));
 	top_toolbar->add_child(favorite_button);
 	favorite_button->connect(SceneStringName(pressed), callable_mp(this, &FileDialog::_favorite_pressed));
 
@@ -2159,7 +2335,6 @@ FileDialog::FileDialog() {
 
 	make_dir_button = memnew(Button);
 	make_dir_button->set_theme_type_variation(SceneStringName(FlatButton));
-	make_dir_button->set_accessibility_name(ETR("Create New Folder"));
 	make_dir_button->set_tooltip_text(ETR("Create a new folder."));
 	make_dir_container->add_child(make_dir_button);
 	make_dir_button->connect(SceneStringName(pressed), callable_mp(this, &FileDialog::_make_dir));
@@ -2198,7 +2373,8 @@ FileDialog::FileDialog() {
 		favorite_list = memnew(ItemList);
 		favorite_list->set_v_size_flags(Control::SIZE_EXPAND_FILL);
 		favorite_list->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
-		favorite_list->set_accessibility_name(ETR("Favorites"));
+		favorite_list->set_theme_type_variation("ItemListSecondary");
+		favorite_list->set_accessibility_name(ETR("Favorites:"));
 		favorite_vbox->add_child(favorite_list);
 		favorite_list->connect(SceneStringName(item_selected), callable_mp(this, &FileDialog::_favorite_selected));
 
@@ -2214,7 +2390,8 @@ FileDialog::FileDialog() {
 		recent_list = memnew(ItemList);
 		recent_list->set_v_size_flags(Control::SIZE_EXPAND_FILL);
 		recent_list->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
-		recent_list->set_accessibility_name(ETR("Recent"));
+		recent_list->set_theme_type_variation("ItemListSecondary");
+		recent_list->set_accessibility_name(ETR("Recent:"));
 		recent_vbox->add_child(recent_list);
 		recent_list->connect(SceneStringName(item_selected), callable_mp(this, &FileDialog::_recent_selected));
 	}
@@ -2236,7 +2413,6 @@ FileDialog::FileDialog() {
 	show_hidden->set_theme_type_variation(SceneStringName(FlatButton));
 	show_hidden->set_toggle_mode(true);
 	show_hidden->set_pressed(is_showing_hidden_files());
-	show_hidden->set_accessibility_name(ETR("Show Hidden Files"));
 	show_hidden->set_tooltip_text(ETR("Toggle the visibility of hidden files."));
 	lower_toolbar->add_child(show_hidden);
 	show_hidden->connect(SceneStringName(toggled), callable_mp(this, &FileDialog::set_show_hidden_files));
@@ -2255,7 +2431,6 @@ FileDialog::FileDialog() {
 	thumbnail_mode_button->set_pressed(true);
 	thumbnail_mode_button->set_button_group(view_mode_group);
 	thumbnail_mode_button->set_theme_type_variation(SceneStringName(FlatButton));
-	thumbnail_mode_button->set_accessibility_name(ETR("View as Thumbnails"));
 	thumbnail_mode_button->set_tooltip_text(ETR("View items as a grid of thumbnails."));
 	layout_container->add_child(thumbnail_mode_button);
 	thumbnail_mode_button->connect(SceneStringName(pressed), callable_mp(this, &FileDialog::set_display_mode).bind(DISPLAY_THUMBNAILS));
@@ -2264,7 +2439,6 @@ FileDialog::FileDialog() {
 	list_mode_button->set_toggle_mode(true);
 	list_mode_button->set_button_group(view_mode_group);
 	list_mode_button->set_theme_type_variation(SceneStringName(FlatButton));
-	list_mode_button->set_accessibility_name(ETR("View as List"));
 	list_mode_button->set_tooltip_text(ETR("View items as a list."));
 	layout_container->add_child(list_mode_button);
 	list_mode_button->connect(SceneStringName(pressed), callable_mp(this, &FileDialog::set_display_mode).bind(DISPLAY_LIST));
@@ -2276,7 +2450,6 @@ FileDialog::FileDialog() {
 	show_filename_filter_button->set_theme_type_variation(SceneStringName(FlatButton));
 	show_filename_filter_button->set_toggle_mode(true);
 	show_filename_filter_button->set_pressed(false);
-	show_filename_filter_button->set_accessibility_name(ETR("Filter File Names"));
 	show_filename_filter_button->set_tooltip_text(ETR("Toggle the visibility of the filter for file names."));
 	lower_toolbar->add_child(show_filename_filter_button);
 	show_filename_filter_button->connect(SceneStringName(toggled), callable_mp(this, &FileDialog::set_show_filename_filter));
@@ -2285,7 +2458,6 @@ FileDialog::FileDialog() {
 	file_sort_button->set_flat(false);
 	file_sort_button->set_theme_type_variation("FlatMenuButton");
 	file_sort_button->set_tooltip_text(ETR("Sort files"));
-	file_sort_button->set_accessibility_name(ETR("Sort Files"));
 
 	PopupMenu *sort_menu = file_sort_button->get_popup();
 	sort_menu->add_radio_check_item(ETR("Sort by Name (Ascending)"), int(FileSortOption::NAME));
@@ -2301,7 +2473,7 @@ FileDialog::FileDialog() {
 	file_list = memnew(ItemList);
 	file_list->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
 	file_list->set_v_size_flags(Control::SIZE_EXPAND_FILL);
-	file_list->set_accessibility_name(ETR("Directories and Files"));
+	file_list->set_accessibility_name(ETR("Directories & Files:"));
 	file_list->set_allow_rmb_select(true);
 	file_vbox->add_child(file_list);
 	file_list->connect("multi_selected", callable_mp(this, &FileDialog::_file_list_multi_selected));
@@ -2332,7 +2504,7 @@ FileDialog::FileDialog() {
 	filename_filter->set_stretch_ratio(4);
 	filename_filter->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 	filename_filter->set_clear_button_enabled(true);
-	filename_filter->set_accessibility_name(ETR("Filename Filter"));
+	filename_filter->set_accessibility_name(ETR("Filename Filter:"));
 	filename_filter_box->add_child(filename_filter);
 	filename_filter->connect(SceneStringName(text_changed), callable_mp(this, &FileDialog::_filename_filter_changed).unbind(1));
 	filename_filter->connect(SceneStringName(text_submitted), callable_mp(this, &FileDialog::_filename_filter_selected).unbind(1));
@@ -2346,7 +2518,7 @@ FileDialog::FileDialog() {
 	}
 
 	filename_edit = memnew(LineEdit);
-	filename_edit->set_accessibility_name(ETR("File Name"));
+	filename_edit->set_accessibility_name(ETR("File:"));
 	filename_edit->set_structured_text_bidi_override(TextServer::STRUCTURED_TEXT_FILE);
 	filename_edit->set_stretch_ratio(4);
 	filename_edit->set_h_size_flags(Control::SIZE_EXPAND_FILL);
@@ -2373,6 +2545,11 @@ FileDialog::FileDialog() {
 	confirm_save = memnew(ConfirmationDialog);
 	add_child(confirm_save, false, INTERNAL_MODE_FRONT);
 	confirm_save->connect(SceneStringName(confirmed), callable_mp(this, &FileDialog::_save_confirm_pressed));
+
+	delete_dialog = memnew(ConfirmationDialog);
+	delete_dialog->set_text(ETR("Delete the selected file?\nDepending on your filesystem configuration, the files will either be moved to the system trash or deleted permanently."));
+	add_child(delete_dialog, false, INTERNAL_MODE_FRONT);
+	delete_dialog->connect(SceneStringName(confirmed), callable_mp(this, &FileDialog::_delete_confirm));
 
 	make_dir_dialog = memnew(ConfirmationDialog);
 	make_dir_dialog->set_title(ETR("Create Folder"));

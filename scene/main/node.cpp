@@ -31,6 +31,10 @@
 #include "node.h"
 #include "node.compat.inc"
 
+STATIC_ASSERT_INCOMPLETE_TYPE(class, Mesh);
+STATIC_ASSERT_INCOMPLETE_TYPE(class, RenderingServer);
+STATIC_ASSERT_INCOMPLETE_TYPE(class, Shader);
+
 #include "core/config/project_settings.h"
 #include "core/io/resource_loader.h"
 #include "core/object/message_queue.h"
@@ -44,7 +48,9 @@
 #include "scene/resources/packed_scene.h"
 #include "viewport.h"
 
-int Node::orphan_node_count = 0;
+#ifdef DEBUG_ENABLED
+SafeNumeric<uint64_t> Node::total_node_count{ 0 };
+#endif
 
 thread_local Node *Node::current_process_thread_group = nullptr;
 
@@ -68,7 +74,7 @@ void Node::_notification(int p_notification) {
 				for (int i = 0; i < get_child_count(); i++) {
 					Node *child_node = get_child(i);
 					Window *child_wnd = Object::cast_to<Window>(child_node);
-					if (child_wnd && !child_wnd->is_embedded()) {
+					if (child_wnd && !(child_wnd->is_visible() && (child_wnd->is_embedded() || child_wnd->is_popup()))) {
 						continue;
 					}
 					if (child_node->is_part_of_edited_scene()) {
@@ -165,7 +171,6 @@ void Node::_notification(int p_notification) {
 			}
 
 			data.tree->nodes_in_tree_count++;
-			orphan_node_count--;
 
 		} break;
 
@@ -193,7 +198,6 @@ void Node::_notification(int p_notification) {
 			}
 
 			data.tree->nodes_in_tree_count--;
-			orphan_node_count++;
 
 			if (data.input) {
 				remove_from_group("_vp_input" + itos(get_viewport()->get_instance_id()));
@@ -952,7 +956,7 @@ void Node::set_physics_interpolation_mode(PhysicsInterpolationMode p_mode) {
 }
 
 void Node::reset_physics_interpolation() {
-	if (is_inside_tree()) {
+	if (SceneTree::is_fti_enabled() && is_inside_tree()) {
 		propagate_notification(NOTIFICATION_RESET_PHYSICS_INTERPOLATION);
 
 		// If `reset_physics_interpolation()` is called explicitly by the user
@@ -1416,20 +1420,21 @@ void Node::_set_name_nocheck(const StringName &p_name) {
 
 void Node::set_name(const StringName &p_name) {
 	ERR_FAIL_COND_MSG(data.tree && !Thread::is_main_thread(), "Changing the name to nodes inside the SceneTree is only allowed from the main thread. Use `set_name.call_deferred(new_name)`.");
+	ERR_FAIL_COND(p_name.is_empty());
+
 	const StringName old_name = data.name;
+	if (data.unique_name_in_owner && data.owner) {
+		_release_unique_name_in_owner();
+	}
+
 	{
 		const String input_name_str = String(p_name);
-		ERR_FAIL_COND(input_name_str.is_empty());
 		const String validated_node_name_string = input_name_str.validate_node_name();
 		if (input_name_str == validated_node_name_string) {
 			data.name = p_name;
 		} else {
 			data.name = StringName(validated_node_name_string);
 		}
-	}
-
-	if (data.unique_name_in_owner && data.owner) {
-		_release_unique_name_in_owner();
 	}
 
 	if (data.parent) {
@@ -1455,7 +1460,7 @@ void Node::set_name(const StringName &p_name) {
 String Node::get_description() const {
 	String description;
 	if (is_inside_tree()) {
-		description = get_path();
+		description = String(get_path());
 	} else {
 		description = get_name();
 		if (description.is_empty()) {
@@ -1781,6 +1786,26 @@ void Node::_update_children_cache_impl() const {
 	data.children_cache_dirty = false;
 }
 
+template <bool p_include_internal>
+Iterable<Node::ChildrenIterator> Node::iterate_children() const {
+	// The thread guard is omitted for performance reasons.
+	// ERR_THREAD_GUARD_V(Iterable<ChildrenIterator>(nullptr, nullptr));
+
+	_update_children_cache();
+	const uint32_t size = data.children_cache.size();
+	// Might be null, but then size and internal counts are also 0.
+	Node **ptr = data.children_cache.ptr();
+
+	if constexpr (p_include_internal) {
+		return Iterable(ChildrenIterator(ptr), ChildrenIterator(ptr + size));
+	} else {
+		return Iterable(ChildrenIterator(ptr + data.internal_children_front_count_cache), ChildrenIterator(ptr + size - data.internal_children_back_count_cache));
+	}
+}
+
+template Iterable<Node::ChildrenIterator> Node::iterate_children<true>() const;
+template Iterable<Node::ChildrenIterator> Node::iterate_children<false>() const;
+
 int Node::get_child_count(bool p_include_internal) const {
 	ERR_THREAD_GUARD_V(0);
 	if (p_include_internal) {
@@ -1813,14 +1838,30 @@ Node *Node::get_child(int p_index, bool p_include_internal) const {
 
 TypedArray<Node> Node::get_children(bool p_include_internal) const {
 	ERR_THREAD_GUARD_V(TypedArray<Node>());
-	TypedArray<Node> arr;
-	int cc = get_child_count(p_include_internal);
-	arr.resize(cc);
-	for (int i = 0; i < cc; i++) {
-		arr[i] = get_child(i, p_include_internal);
+	_update_children_cache();
+
+	TypedArray<Node> children;
+
+	if (p_include_internal) {
+		children.resize(data.children_cache.size());
+
+		Array::Iterator itr = children.begin();
+		for (const Node *child : data.children_cache) {
+			*itr = child;
+			++itr;
+		}
+	} else {
+		const int size = data.children_cache.size() - data.internal_children_back_count_cache;
+		children.resize(size - data.internal_children_front_count_cache);
+
+		Array::Iterator itr = children.begin();
+		for (int i = data.internal_children_front_count_cache; i < size; i++) {
+			*itr = data.children_cache[i];
+			++itr;
+		}
 	}
 
-	return arr;
+	return children;
 }
 
 Node *Node::_get_child_by_name(const StringName &p_name) const {
@@ -2045,6 +2086,14 @@ Node *Node::find_parent(const String &p_pattern) const {
 	return nullptr;
 }
 
+void Node::set_unique_scene_id(int32_t p_unique_id) {
+	data.unique_scene_id = p_unique_id;
+}
+
+int32_t Node::get_unique_scene_id() const {
+	return data.unique_scene_id;
+}
+
 Window *Node::get_window() const {
 	ERR_THREAD_GUARD_V(nullptr);
 	Viewport *vp = get_viewport();
@@ -2052,6 +2101,14 @@ Window *Node::get_window() const {
 		return vp->get_base_window();
 	}
 	return nullptr;
+}
+
+Window *Node::get_non_popup_window() const {
+	Window *w = get_window();
+	while (w && w->is_popup()) {
+		w = w->get_parent_visible_window();
+	}
+	return w;
 }
 
 Window *Node::get_last_exclusive_window() const {
@@ -2170,7 +2227,7 @@ void Node::_acquire_unique_name_in_owner() {
 	StringName key = StringName(UNIQUE_NODE_PREFIX + data.name.operator String());
 	Node **which = data.owner->data.owned_unique_nodes.getptr(key);
 	if (which != nullptr && *which != this) {
-		String which_path = is_inside_tree() ? (*which)->get_path() : data.owner->get_path_to(*which);
+		String which_path = String(is_inside_tree() ? (*which)->get_path() : data.owner->get_path_to(*which));
 		WARN_PRINT(vformat("Setting node name '%s' to be unique within scene for '%s', but it's already claimed by '%s'.\n'%s' is no longer set as having a unique name.",
 				get_name(), is_inside_tree() ? get_path() : data.owner->get_path_to(this), which_path, which_path));
 		data.unique_name_in_owner = false;
@@ -2371,13 +2428,13 @@ NodePath Node::get_path() const {
 	const Node *n = this;
 
 	Vector<StringName> path;
+	path.resize(data.depth);
 
+	StringName *ptrw = path.ptrw();
 	while (n) {
-		path.push_back(n->get_name());
+		ptrw[n->data.depth - 1] = n->get_name();
 		n = n->data.parent;
 	}
-
-	path.reverse();
 
 	data.path_cache = memnew(NodePath(path, true));
 
@@ -2391,7 +2448,7 @@ bool Node::is_in_group(const StringName &p_identifier) const {
 
 void Node::add_to_group(const StringName &p_identifier, bool p_persistent) {
 	ERR_THREAD_GUARD
-	ERR_FAIL_COND(!p_identifier.operator String().length());
+	ERR_FAIL_COND_MSG(p_identifier.is_empty(), vformat("Cannot add node '%s' to a group with an empty name.", get_name()));
 
 	if (data.grouped.has(p_identifier)) {
 		return;
@@ -2772,7 +2829,7 @@ Node *Node::_duplicate(int p_flags, HashMap<const Node *, Node *> *r_duplimap) c
 		nip->set_instance_path(ip->get_instance_path());
 		node = nip;
 
-	} else if ((p_flags & DUPLICATE_USE_INSTANTIATION) && !get_scene_file_path().is_empty()) {
+	} else if ((p_flags & DUPLICATE_USE_INSTANTIATION) && is_instance()) {
 		Ref<PackedScene> res = ResourceLoader::load(get_scene_file_path());
 		ERR_FAIL_COND_V(res.is_null(), nullptr);
 		PackedScene::GenEditState edit_state = PackedScene::GEN_EDIT_STATE_DISABLED;
@@ -2797,7 +2854,7 @@ Node *Node::_duplicate(int p_flags, HashMap<const Node *, Node *> *r_duplimap) c
 		ERR_FAIL_NULL_V(node, nullptr);
 	}
 
-	if (!get_scene_file_path().is_empty()) { //an instance
+	if (is_instance()) {
 		node->set_scene_file_path(get_scene_file_path());
 		node->data.editable_instance = data.editable_instance;
 	}
@@ -2828,7 +2885,7 @@ Node *Node::_duplicate(int p_flags, HashMap<const Node *, Node *> *r_duplimap) c
 
 				node_tree.push_back(descendant);
 
-				if (!descendant->get_scene_file_path().is_empty() && instance_roots.has(descendant->get_owner())) {
+				if (descendant->is_instance() && instance_roots.has(descendant->get_owner())) {
 					instance_roots.push_back(descendant);
 				}
 			}
@@ -3326,7 +3383,7 @@ void Node::_set_tree(SceneTree *p_tree) {
 #ifdef DEBUG_ENABLED
 static HashMap<ObjectID, List<String>> _print_orphan_nodes_map;
 
-static void _print_orphan_nodes_routine(Object *p_obj) {
+static void _print_orphan_nodes_routine(Object *p_obj, void *p_user_data) {
 	Node *n = Object::cast_to<Node>(p_obj);
 	if (!n) {
 		return;
@@ -3345,7 +3402,7 @@ static void _print_orphan_nodes_routine(Object *p_obj) {
 	if (p == n) {
 		path = n->get_name();
 	} else {
-		path = String(p->get_name()) + "/" + p->get_path_to(n);
+		path = String(p->get_name()) + "/" + String(p->get_path_to(n));
 	}
 
 	String source;
@@ -3370,7 +3427,7 @@ void Node::print_orphan_nodes() {
 	_print_orphan_nodes_map.clear();
 
 	// Collect and print information about orphan nodes.
-	ObjectDB::debug_objects(_print_orphan_nodes_routine);
+	ObjectDB::debug_objects(_print_orphan_nodes_routine, nullptr);
 
 	for (const KeyValue<ObjectID, List<String>> &E : _print_orphan_nodes_map) {
 		print_line(itos(E.key) + " - Stray Node: " + E.value.get(0) + " (Type: " + E.value.get(1) + ") (Source:" + E.value.get(2) + ")");
@@ -3387,7 +3444,7 @@ TypedArray<int> Node::get_orphan_node_ids() {
 	_print_orphan_nodes_map.clear();
 
 	// Collect and return information about orphan nodes.
-	ObjectDB::debug_objects(_print_orphan_nodes_routine);
+	ObjectDB::debug_objects(_print_orphan_nodes_routine, nullptr);
 
 	for (const KeyValue<ObjectID, List<String>> &E : _print_orphan_nodes_map) {
 		ret.push_back(E.key);
@@ -3411,20 +3468,6 @@ void Node::queue_free() {
 	}
 }
 
-void Node::set_import_path(const NodePath &p_import_path) {
-#ifdef TOOLS_ENABLED
-	data.import_path = p_import_path;
-#endif
-}
-
-NodePath Node::get_import_path() const {
-#ifdef TOOLS_ENABLED
-	return data.import_path;
-#else
-	return NodePath();
-#endif
-}
-
 #ifdef TOOLS_ENABLED
 static void _add_nodes_to_options(const Node *p_base, const Node *p_node, List<String> *r_options) {
 	if (p_node != p_base && !p_node->get_owner()) {
@@ -3434,7 +3477,7 @@ static void _add_nodes_to_options(const Node *p_base, const Node *p_node, List<S
 		String n = "%" + p_node->get_name();
 		r_options->push_back(n.quote());
 	}
-	String n = p_base->get_path_to(p_node);
+	String n = String(p_base->get_path_to(p_node));
 	r_options->push_back(n.quote());
 	for (int i = 0; i < p_node->get_child_count(); i++) {
 		_add_nodes_to_options(p_base, p_node->get_child(i), r_options);
@@ -3686,8 +3729,9 @@ RID Node::get_accessibility_element() const {
 		return RID();
 	}
 	if (unlikely(data.accessibility_element.is_null())) {
-		if (get_window() && get_window()->get_window_id() != DisplayServer::INVALID_WINDOW_ID) {
-			data.accessibility_element = DisplayServer::get_singleton()->accessibility_create_element(get_window()->get_window_id(), DisplayServer::ROLE_CONTAINER);
+		Window *w = get_non_popup_window();
+		if (w && w->get_window_id() != DisplayServer::INVALID_WINDOW_ID && get_window()->is_visible()) {
+			data.accessibility_element = DisplayServer::get_singleton()->accessibility_create_element(w->get_window_id(), DisplayServer::ROLE_CONTAINER);
 		}
 	}
 	return data.accessibility_element;
@@ -3827,9 +3871,6 @@ void Node::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_editor_description", "editor_description"), &Node::set_editor_description);
 	ClassDB::bind_method(D_METHOD("get_editor_description"), &Node::get_editor_description);
 
-	ClassDB::bind_method(D_METHOD("_set_import_path", "import_path"), &Node::set_import_path);
-	ClassDB::bind_method(D_METHOD("_get_import_path"), &Node::get_import_path);
-
 	ClassDB::bind_method(D_METHOD("set_unique_name_in_owner", "enable"), &Node::set_unique_name_in_owner);
 	ClassDB::bind_method(D_METHOD("is_unique_name_in_owner"), &Node::is_unique_name_in_owner);
 
@@ -3839,8 +3880,6 @@ void Node::_bind_methods() {
 #ifdef TOOLS_ENABLED
 	ClassDB::bind_method(D_METHOD("_set_property_pinned", "property", "pinned"), &Node::set_property_pinned);
 #endif
-
-	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "_import_path", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NO_EDITOR | PROPERTY_USAGE_INTERNAL), "_set_import_path", "_get_import_path");
 
 	{
 		MethodInfo mi;
@@ -4031,8 +4070,10 @@ String Node::_get_name_num_separator() {
 }
 
 Node::Node() {
-	orphan_node_count++;
-
+	_define_ancestry(AncestralClass::NODE);
+#ifdef DEBUG_ENABLED
+	total_node_count.increment();
+#endif
 	// Default member initializer for bitfield is a C++20 extension, so:
 
 	data.process_mode = PROCESS_MODE_INHERIT;
@@ -4079,7 +4120,9 @@ Node::~Node() {
 	ERR_FAIL_COND(data.parent);
 	ERR_FAIL_COND(data.children_cache.size());
 
-	orphan_node_count--;
+#ifdef DEBUG_ENABLED
+	total_node_count.decrement();
+#endif
 }
 
 ////////////////////////////////

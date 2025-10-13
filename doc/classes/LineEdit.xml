@@ -82,8 +82,9 @@
 		</method>
 		<method name="edit">
 			<return type="void" />
+			<param index="0" name="hide_focus" type="bool" default="false" />
 			<description>
-				Allows entering edit mode whether the [LineEdit] is focused or not.
+				Allows entering edit mode whether the [LineEdit] is focused or not. If [param hide_focus] is [code]true[/code], the focused state will not be shown (see [method Control.grab_focus]).
 				See also [member keep_editing_on_text_submit].
 			</description>
 		</method>
@@ -318,7 +319,7 @@
 		<member name="max_length" type="int" setter="set_max_length" getter="get_max_length" default="0">
 			Maximum number of characters that can be entered inside the [LineEdit]. If [code]0[/code], there is no limit.
 			When a limit is defined, characters that would exceed [member max_length] are truncated. This happens both for existing [member text] contents when setting the max length, or for new text inserted in the [LineEdit], including pasting.
-			If any input text is truncated, the [signal text_change_rejected] signal is emitted with the truncated substring as parameter:
+			If any input text is truncated, the [signal text_change_rejected] signal is emitted with the truncated substring as a parameter:
 			[codeblocks]
 			[gdscript]
 			text = "Hello world"
@@ -327,7 +328,7 @@
 			max_length = 10
 			text += " goodbye"
 			# `text` becomes "Hello good".
-			# `text_change_rejected` is emitted with "bye" as parameter.
+			# `text_change_rejected` is emitted with "bye" as a parameter.
 			[/gdscript]
 			[csharp]
 			Text = "Hello world";
@@ -336,7 +337,7 @@
 			MaxLength = 10;
 			Text += " goodbye";
 			// `Text` becomes "Hello good".
-			// `text_change_rejected` is emitted with "bye" as parameter.
+			// `text_change_rejected` is emitted with "bye" as a parameter.
 			[/csharp]
 			[/codeblocks]
 		</member>

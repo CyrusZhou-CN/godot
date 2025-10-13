@@ -290,6 +290,7 @@ private:
 
 		/* Other visuals */
 		Ref<StyleBox> style_normal;
+		Ref<StyleBox> style_readonly;
 
 		Color brace_mismatch_color;
 
@@ -324,6 +325,8 @@ protected:
 #endif
 
 	virtual void _unhide_carets() override;
+
+	virtual void _draw_guidelines() override;
 
 	/* Text manipulation */
 
@@ -504,6 +507,7 @@ public:
 
 	String get_text_for_symbol_lookup() const;
 	String get_text_with_cursor_char(int p_line, int p_column) const;
+	String get_lookup_word(int p_line, int p_column) const;
 
 	void set_symbol_lookup_word_as_valid(bool p_valid);
 

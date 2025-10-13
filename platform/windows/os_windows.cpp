@@ -31,7 +31,6 @@
 #include "os_windows.h"
 
 #include "display_server_windows.h"
-#include "joypad_windows.h"
 #include "lang_table.h"
 #include "windows_terminal_logger.h"
 #include "windows_utils.h"
@@ -39,6 +38,7 @@
 #include "core/debugger/engine_debugger.h"
 #include "core/debugger/script_debugger.h"
 #include "core/io/marshalls.h"
+#include "core/os/main_loop.h"
 #include "core/version_generated.gen.h"
 #include "drivers/windows/dir_access_windows.h"
 #include "drivers/windows/file_access_windows.h"
@@ -47,9 +47,9 @@
 #include "drivers/windows/net_socket_winsock.h"
 #include "drivers/windows/thread_windows.h"
 #include "main/main.h"
-#include "servers/audio_server.h"
+#include "servers/audio/audio_server.h"
 #include "servers/rendering/rendering_server_default.h"
-#include "servers/text_server.h"
+#include "servers/text/text_server.h"
 
 #include <avrt.h>
 #include <bcrypt.h>
@@ -111,7 +111,7 @@ static String fix_path(const String &p_path) {
 	if (p_path.is_relative_path()) {
 		Char16String current_dir_name;
 		size_t str_len = GetCurrentDirectoryW(0, nullptr);
-		current_dir_name.resize(str_len + 1);
+		current_dir_name.resize_uninitialized(str_len + 1);
 		GetCurrentDirectoryW(current_dir_name.size(), (LPWSTR)current_dir_name.ptrw());
 		path = String::utf16((const char16_t *)current_dir_name.get_data()).trim_prefix(R"(\\?\)").replace_char('\\', '/').path_join(path);
 	}
@@ -640,7 +640,7 @@ String OS_Windows::get_version_alias() const {
 			} else {
 				windows_string += "Unknown";
 			}
-			// Windows versions older than 7 cannot run Godot.
+			// Windows versions older than 10 cannot run Godot.
 
 			return vformat("%s (build %d)", windows_string, (int64_t)fow.dwBuildNumber);
 		}
@@ -649,15 +649,78 @@ String OS_Windows::get_version_alias() const {
 	return "";
 }
 
-Vector<String> OS_Windows::get_video_adapter_driver_info() const {
-	if (RenderingServer::get_singleton() == nullptr) {
+Vector<String> OS_Windows::_get_video_adapter_driver_info_reg(const String &p_name) const {
+	Vector<String> info;
+
+	String subkey = "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}";
+	HKEY hkey = nullptr;
+	LSTATUS result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, (LPCWSTR)subkey.utf16().get_data(), 0, KEY_READ, &hkey);
+	if (result != ERROR_SUCCESS) {
 		return Vector<String>();
 	}
 
-	static Vector<String> info;
-	if (!info.is_empty()) {
-		return info;
+	DWORD subkeys = 0;
+	result = RegQueryInfoKeyW(hkey, nullptr, nullptr, nullptr, &subkeys, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+	if (result != ERROR_SUCCESS) {
+		RegCloseKey(hkey);
+		return Vector<String>();
 	}
+	for (DWORD i = 0; i < subkeys; i++) {
+		WCHAR key_name[MAX_PATH] = L"";
+		DWORD key_name_size = MAX_PATH;
+		result = RegEnumKeyExW(hkey, i, key_name, &key_name_size, nullptr, nullptr, nullptr, nullptr);
+		if (result != ERROR_SUCCESS) {
+			continue;
+		}
+		String id = String::utf16((const char16_t *)key_name, key_name_size);
+		if (!id.is_empty()) {
+			HKEY sub_hkey = nullptr;
+			result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, (LPCWSTR)(subkey + "\\" + id).utf16().get_data(), 0, KEY_QUERY_VALUE, &sub_hkey);
+			if (result != ERROR_SUCCESS) {
+				continue;
+			}
+
+			WCHAR buffer[4096];
+			DWORD buffer_len = 4096;
+			DWORD vtype = REG_SZ;
+			if (RegQueryValueExW(sub_hkey, L"DriverDesc", nullptr, &vtype, (LPBYTE)buffer, &buffer_len) != ERROR_SUCCESS || buffer_len == 0) {
+				buffer_len = 4096;
+				if (RegQueryValueExW(sub_hkey, L"HardwareInformation.AdapterString", nullptr, &vtype, (LPBYTE)buffer, &buffer_len) != ERROR_SUCCESS || buffer_len == 0) {
+					RegCloseKey(sub_hkey);
+					continue;
+				}
+			}
+
+			String driver_name = String::utf16((const char16_t *)buffer, buffer_len).strip_edges();
+			if (driver_name == p_name) {
+				String driver_provider = driver_name;
+				String driver_version;
+
+				buffer_len = 4096;
+				if (RegQueryValueExW(sub_hkey, L"ProviderName", nullptr, &vtype, (LPBYTE)buffer, &buffer_len) == ERROR_SUCCESS && buffer_len != 0) {
+					driver_provider = String::utf16((const char16_t *)buffer, buffer_len).strip_edges();
+				}
+				buffer_len = 4096;
+				if (RegQueryValueExW(sub_hkey, L"DriverVersion", nullptr, &vtype, (LPBYTE)buffer, &buffer_len) == ERROR_SUCCESS && buffer_len != 0) {
+					driver_version = String::utf16((const char16_t *)buffer, buffer_len).strip_edges();
+				}
+				if (!driver_version.is_empty()) {
+					info.push_back(driver_provider);
+					info.push_back(driver_version);
+
+					RegCloseKey(sub_hkey);
+					break;
+				}
+			}
+			RegCloseKey(sub_hkey);
+		}
+	}
+	RegCloseKey(hkey);
+	return info;
+}
+
+Vector<String> OS_Windows::_get_video_adapter_driver_info_wmi(const String &p_name) const {
+	Vector<String> info;
 
 	REFCLSID clsid = CLSID_WbemLocator; // Unmarshaler CLSID
 	REFIID uuid = IID_IWbemLocator; // Interface UUID
@@ -667,11 +730,6 @@ Vector<String> OS_Windows::get_video_adapter_driver_info() const {
 	IWbemClassObject *pnpSDriverObject[1]; // contains driver name, version, etc.
 	String driver_name;
 	String driver_version;
-
-	const String device_name = RenderingServer::get_singleton()->get_video_adapter_name();
-	if (device_name.is_empty()) {
-		return Vector<String>();
-	}
 
 	HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, uuid, (LPVOID *)&wbemLocator);
 	if (hr != S_OK) {
@@ -687,7 +745,7 @@ Vector<String> OS_Windows::get_video_adapter_driver_info() const {
 		return Vector<String>();
 	}
 
-	const String gpu_device_class_query = vformat("SELECT * FROM Win32_PnPSignedDriver WHERE DeviceName = \"%s\"", device_name);
+	const String gpu_device_class_query = vformat("SELECT * FROM Win32_PnPSignedDriver WHERE DeviceName = \"%s\"", p_name);
 	BSTR query = SysAllocString((const WCHAR *)gpu_device_class_query.utf16().get_data());
 	BSTR query_lang = SysAllocString(L"WQL");
 	hr = wbemServices->ExecQuery(query_lang, query, WBEM_FLAG_RETURN_IMMEDIATELY | WBEM_FLAG_FORWARD_ONLY, nullptr, &iter);
@@ -752,6 +810,28 @@ Vector<String> OS_Windows::get_video_adapter_driver_info() const {
 	return info;
 }
 
+Vector<String> OS_Windows::get_video_adapter_driver_info() const {
+	if (RenderingServer::get_singleton() == nullptr) {
+		return Vector<String>();
+	}
+
+	static Vector<String> info;
+	if (!info.is_empty()) {
+		return info;
+	}
+
+	const String device_name = RenderingServer::get_singleton()->get_video_adapter_name();
+	if (device_name.is_empty()) {
+		return Vector<String>();
+	}
+
+	info = _get_video_adapter_driver_info_reg(device_name);
+	if (info.is_empty()) {
+		info = _get_video_adapter_driver_info_wmi(device_name);
+	}
+	return info;
+}
+
 bool OS_Windows::get_user_prefers_integrated_gpu() const {
 	// On Windows 10, the preferred GPU configured in Windows Settings is
 	// stored in the registry under the key
@@ -772,7 +852,7 @@ bool OS_Windows::get_user_prefers_integrated_gpu() const {
 			GetCurrentApplicationUserModelIdPtr GetCurrentApplicationUserModelId = (GetCurrentApplicationUserModelIdPtr)(void *)GetProcAddress(kernel32, "GetCurrentApplicationUserModelId");
 
 			if (GetCurrentApplicationUserModelId) {
-				UINT32 length = std::size(value_name);
+				UINT32 length = std_size(value_name);
 				LONG result = GetCurrentApplicationUserModelId(&length, value_name);
 				if (result == ERROR_SUCCESS) {
 					is_packaged = true;
@@ -1280,12 +1360,12 @@ Dictionary OS_Windows::execute_with_pipe(const String &p_path, const List<String
 
 	Char16String current_dir_name;
 	size_t str_len = GetCurrentDirectoryW(0, nullptr);
-	current_dir_name.resize(str_len + 1);
+	current_dir_name.resize_uninitialized(str_len + 1);
 	GetCurrentDirectoryW(current_dir_name.size(), (LPWSTR)current_dir_name.ptrw());
 	if (current_dir_name.size() >= MAX_PATH) {
 		Char16String current_short_dir_name;
 		str_len = GetShortPathNameW((LPCWSTR)current_dir_name.ptr(), nullptr, 0);
-		current_short_dir_name.resize(str_len);
+		current_short_dir_name.resize_uninitialized(str_len);
 		GetShortPathNameW((LPCWSTR)current_dir_name.ptr(), (LPWSTR)current_short_dir_name.ptrw(), current_short_dir_name.size());
 		current_dir_name = current_short_dir_name;
 	}
@@ -1386,12 +1466,12 @@ Error OS_Windows::execute(const String &p_path, const List<String> &p_arguments,
 
 	Char16String current_dir_name;
 	size_t str_len = GetCurrentDirectoryW(0, nullptr);
-	current_dir_name.resize(str_len + 1);
+	current_dir_name.resize_uninitialized(str_len + 1);
 	GetCurrentDirectoryW(current_dir_name.size(), (LPWSTR)current_dir_name.ptrw());
 	if (current_dir_name.size() >= MAX_PATH) {
 		Char16String current_short_dir_name;
 		str_len = GetShortPathNameW((LPCWSTR)current_dir_name.ptr(), nullptr, 0);
-		current_short_dir_name.resize(str_len);
+		current_short_dir_name.resize_uninitialized(str_len);
 		GetShortPathNameW((LPCWSTR)current_dir_name.ptr(), (LPWSTR)current_short_dir_name.ptrw(), current_short_dir_name.size());
 		current_dir_name = current_short_dir_name;
 	}
@@ -1485,12 +1565,12 @@ Error OS_Windows::create_process(const String &p_path, const List<String> &p_arg
 
 	Char16String current_dir_name;
 	size_t str_len = GetCurrentDirectoryW(0, nullptr);
-	current_dir_name.resize(str_len + 1);
+	current_dir_name.resize_uninitialized(str_len + 1);
 	GetCurrentDirectoryW(current_dir_name.size(), (LPWSTR)current_dir_name.ptrw());
 	if (current_dir_name.size() >= MAX_PATH) {
 		Char16String current_short_dir_name;
 		str_len = GetShortPathNameW((LPCWSTR)current_dir_name.ptr(), nullptr, 0);
-		current_short_dir_name.resize(str_len);
+		current_short_dir_name.resize_uninitialized(str_len);
 		GetShortPathNameW((LPCWSTR)current_dir_name.ptr(), (LPWSTR)current_short_dir_name.ptrw(), current_short_dir_name.size());
 		current_dir_name = current_short_dir_name;
 	}
@@ -1626,7 +1706,7 @@ Vector<String> OS_Windows::get_system_fonts() const {
 		hr = family_names->GetStringLength(index, &length);
 		ERR_CONTINUE(FAILED(hr));
 
-		name.resize(length + 1);
+		name.resize_uninitialized(length + 1);
 		hr = family_names->GetString(index, (WCHAR *)name.ptrw(), length + 1);
 		ERR_CONTINUE(FAILED(hr));
 
@@ -2664,12 +2744,12 @@ OS_Windows::OS_Windows(HINSTANCE _hInstance) {
 	// Reset CWD to ensure long path is used.
 	Char16String current_dir_name;
 	size_t str_len = GetCurrentDirectoryW(0, nullptr);
-	current_dir_name.resize(str_len + 1);
+	current_dir_name.resize_uninitialized(str_len + 1);
 	GetCurrentDirectoryW(current_dir_name.size(), (LPWSTR)current_dir_name.ptrw());
 
 	Char16String new_current_dir_name;
 	str_len = GetLongPathNameW((LPCWSTR)current_dir_name.get_data(), nullptr, 0);
-	new_current_dir_name.resize(str_len + 1);
+	new_current_dir_name.resize_uninitialized(str_len + 1);
 	GetLongPathNameW((LPCWSTR)current_dir_name.get_data(), (LPWSTR)new_current_dir_name.ptrw(), new_current_dir_name.size());
 
 	SetCurrentDirectoryW((LPCWSTR)new_current_dir_name.get_data());

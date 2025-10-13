@@ -309,8 +309,13 @@ String OS::get_bundle_resource_dir() const {
 	return ".";
 }
 
-// Path to macOS .app bundle embedded icon
+// Path to macOS .app bundle embedded icon (.icns file).
 String OS::get_bundle_icon_path() const {
+	return String();
+}
+
+// Name of macOS .app bundle embedded icon (Liquid Glass asset name).
+String OS::get_bundle_icon_name() const {
 	return String();
 }
 
@@ -591,15 +596,20 @@ bool OS::has_feature(const String &p_feature) {
 	}
 #endif
 
-#ifdef THREADS_ENABLED
 	if (p_feature == "threads") {
+#ifdef THREADS_ENABLED
 		return true;
-	}
 #else
-	if (p_feature == "nothreads") {
-		return true;
-	}
+		return false;
 #endif
+	}
+	if (p_feature == "nothreads") {
+#ifdef THREADS_ENABLED
+		return false;
+#else
+		return true;
+#endif
+	}
 
 	if (_check_internal_feature_support(p_feature)) {
 		return true;

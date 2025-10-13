@@ -31,17 +31,17 @@
 #include "default_theme.h"
 
 #include "core/io/image.h"
+#include "scene/resources/dpi_texture.h"
 #include "scene/resources/font.h"
 #include "scene/resources/gradient_texture.h"
 #include "scene/resources/image_texture.h"
 #include "scene/resources/style_box_flat.h"
 #include "scene/resources/style_box_line.h"
-#include "scene/resources/svg_texture.h"
 #include "scene/resources/theme.h"
 #include "scene/scene_string_names.h"
 #include "scene/theme/default_theme_icons.gen.h"
 #include "scene/theme/theme_db.h"
-#include "servers/text_server.h"
+#include "servers/text/text_server.h"
 
 #ifdef BROTLI_ENABLED
 #include "scene/theme/default_font.gen.h"
@@ -79,8 +79,8 @@ static Ref<StyleBoxFlat> sb_expand(Ref<StyleBoxFlat> p_sbox, float p_left, float
 }
 
 // See also `editor_generate_icon()` in `editor/themes/editor_icons.cpp`.
-static Ref<SVGTexture> generate_icon(int p_index) {
-	return SVGTexture::create_from_string(default_theme_icons_sources[p_index], scale);
+static Ref<DPITexture> generate_icon(int p_index) {
+	return DPITexture::create_from_string(default_theme_icons_sources[p_index], scale);
 }
 
 static Ref<StyleBox> make_empty_stylebox(float p_margin_left = -1, float p_margin_top = -1, float p_margin_right = -1, float p_margin_bottom = -1) {
@@ -993,6 +993,11 @@ void fill_default_theme(Ref<Theme> &theme, const Ref<Font> &default_font, const 
 	theme->set_color("font_outline_color", "TabContainer", Color(0, 0, 0));
 	theme->set_color("drop_mark_color", "TabContainer", Color(1, 1, 1));
 
+	theme->set_color("icon_selected_color", "TabContainer", Color(1, 1, 1, 1));
+	theme->set_color("icon_hovered_color", "TabContainer", Color(1, 1, 1, 1));
+	theme->set_color("icon_unselected_color", "TabContainer", Color(1, 1, 1, 1));
+	theme->set_color("icon_disabled_color", "TabContainer", Color(1, 1, 1, 1));
+
 	theme->set_constant("side_margin", "TabContainer", Math::round(8 * scale));
 	theme->set_constant("icon_separation", "TabContainer", Math::round(4 * scale));
 	theme->set_constant("icon_max_width", "TabContainer", 0);
@@ -1024,6 +1029,11 @@ void fill_default_theme(Ref<Theme> &theme, const Ref<Font> &default_font, const 
 	theme->set_color("font_disabled_color", "TabBar", control_font_disabled_color);
 	theme->set_color("font_outline_color", "TabBar", Color(0, 0, 0));
 	theme->set_color("drop_mark_color", "TabBar", Color(1, 1, 1));
+
+	theme->set_color("icon_selected_color", "TabBar", Color(1, 1, 1, 1));
+	theme->set_color("icon_hovered_color", "TabBar", Color(1, 1, 1, 1));
+	theme->set_color("icon_unselected_color", "TabBar", Color(1, 1, 1, 1));
+	theme->set_color("icon_disabled_color", "TabBar", Color(1, 1, 1, 1));
 
 	theme->set_constant("h_separation", "TabBar", Math::round(4 * scale));
 	theme->set_constant("icon_max_width", "TabBar", 0);
@@ -1129,7 +1139,7 @@ void fill_default_theme(Ref<Theme> &theme, const Ref<Font> &default_font, const 
 	preset_sb->set_anti_aliased(false);
 
 	theme->set_stylebox("preset_fg", "ColorPresetButton", preset_sb);
-	theme->set_stylebox("preset_focus", "ColorPicker", focus);
+	theme->set_stylebox("preset_focus", "ColorPresetButton", focus);
 	theme->set_icon("preset_bg", "ColorPresetButton", icons["mini_checkerboard"]);
 	theme->set_icon("overbright_indicator", "ColorPresetButton", icons["color_picker_overbright"]);
 
@@ -1155,6 +1165,12 @@ void fill_default_theme(Ref<Theme> &theme, const Ref<Font> &default_font, const 
 
 	theme->set_stylebox("focus", "RichTextLabel", focus);
 	theme->set_stylebox(CoreStringName(normal), "RichTextLabel", make_empty_stylebox(0, 0, 0, 0));
+
+	Ref<Image> solid_img = Image::create_empty(2, 2, false, Image::FORMAT_RGBA8);
+	solid_img->fill(Color(1, 1, 1, 1));
+	Ref<Texture2D> solid_icon = ImageTexture::create_from_image(solid_img);
+
+	theme->set_icon("horizontal_rule", "RichTextLabel", solid_icon);
 
 	theme->set_font("normal_font", "RichTextLabel", Ref<Font>());
 	theme->set_font("bold_font", "RichTextLabel", bold_font);
@@ -1197,6 +1213,10 @@ void fill_default_theme(Ref<Theme> &theme, const Ref<Font> &default_font, const 
 	theme->set_constant("strikethrough_alpha", "RichTextLabel", 50);
 
 	// Containers
+
+	theme->set_color("touch_dragger_color", "SplitContainer", Color(1, 1, 1, 0.3));
+	theme->set_color("touch_dragger_pressed_color", "SplitContainer", Color(1, 1, 1, 1));
+	theme->set_color("touch_dragger_hover_color", "SplitContainer", Color(1, 1, 1, 0.6));
 
 	theme->set_icon("h_touch_dragger", "SplitContainer", icons["h_dragger"]);
 	theme->set_icon("v_touch_dragger", "SplitContainer", icons["v_dragger"]);

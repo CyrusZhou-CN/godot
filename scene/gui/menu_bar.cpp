@@ -320,11 +320,17 @@ void MenuBar::_notification(int p_what) {
 					}
 				}
 			}
+			if (!is_global) {
+				update_minimum_size();
+			}
 		} break;
 		case NOTIFICATION_LAYOUT_DIRECTION_CHANGED:
 		case NOTIFICATION_THEME_CHANGED: {
 			for (int i = 0; i < menu_cache.size(); i++) {
 				shape(menu_cache.write[i]);
+			}
+			if (global_menu_tag.is_empty()) {
+				update_minimum_size();
 			}
 		} break;
 		case NOTIFICATION_VISIBILITY_CHANGED: {
@@ -487,7 +493,7 @@ void MenuBar::_draw_menu_item(int p_index) {
 			style->draw(ci, item_rect);
 		}
 		// Focus colors only take precedence over normal state.
-		if (has_focus()) {
+		if (has_focus(true)) {
 			color = theme_cache.font_focus_color;
 		} else {
 			color = theme_cache.font_color;

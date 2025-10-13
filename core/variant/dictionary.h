@@ -30,19 +30,18 @@
 
 #pragma once
 
-#include "core/string/ustring.h"
 #include "core/templates/hash_map.h"
 #include "core/templates/local_vector.h"
 #include "core/templates/pair.h"
-#include "core/variant/array.h"
 #include "core/variant/variant_deep_duplicate.h"
 
+class Array;
+class StringName;
 class Variant;
-
 struct ContainerType;
+struct ContainerTypeValidate;
 struct DictionaryPrivate;
 struct StringLikeVariantComparator;
-struct VariantHasher;
 
 class Dictionary {
 	mutable DictionaryPrivate *_p;
@@ -51,7 +50,7 @@ class Dictionary {
 	void _unref() const;
 
 public:
-	using ConstIterator = HashMap<Variant, Variant, VariantHasher, StringLikeVariantComparator>::ConstIterator;
+	using ConstIterator = HashMap<Variant, Variant, HashMapHasherDefault, StringLikeVariantComparator>::ConstIterator;
 
 	ConstIterator begin() const;
 	ConstIterator end() const;
@@ -121,6 +120,8 @@ public:
 	StringName get_typed_value_class_name() const;
 	Variant get_typed_key_script() const;
 	Variant get_typed_value_script() const;
+	const ContainerTypeValidate &get_key_validator() const;
+	const ContainerTypeValidate &get_value_validator() const;
 
 	void make_read_only();
 	bool is_read_only() const;

@@ -182,7 +182,7 @@ const char32_t *TranslationDomain::_get_accented_version(char32_t p_character) c
 		return nullptr;
 	}
 
-	for (unsigned int i = 0; i < std::size(_character_to_accented); i++) {
+	for (unsigned int i = 0; i < std_size(_character_to_accented); i++) {
 		if (_character_to_accented[i].character == p_character) {
 			return _character_to_accented[i].accented_character;
 		}
@@ -253,6 +253,20 @@ PackedStringArray TranslationDomain::get_loaded_locales() const {
 		}
 	}
 	return locales;
+}
+
+// Translation objects that could potentially be used for the given locale.
+HashSet<Ref<Translation>> TranslationDomain::get_potential_translations(const String &p_locale) const {
+	HashSet<Ref<Translation>> res;
+
+	for (const Ref<Translation> &E : translations) {
+		ERR_CONTINUE(E.is_null());
+
+		if (TranslationServer::get_singleton()->compare_locales(p_locale, E->get_locale()) > 0) {
+			res.insert(E);
+		}
+	}
+	return res;
 }
 
 Ref<Translation> TranslationDomain::get_translation_object(const String &p_locale) const {

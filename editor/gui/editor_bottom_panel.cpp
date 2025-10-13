@@ -31,11 +31,11 @@
 #include "editor_bottom_panel.h"
 
 #include "editor/debugger/editor_debugger_node.h"
-#include "editor/editor_command_palette.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/gui/editor_toaster.h"
 #include "editor/gui/editor_version_button.h"
+#include "editor/settings/editor_command_palette.h"
 #include "editor/themes/editor_scale.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/button.h"
@@ -100,6 +100,15 @@ void EditorBottomPanel::_update_disabled_buttons() {
 	right_button->set_disabled(h_scroll->get_value() + h_scroll->get_page() == h_scroll->get_max());
 }
 
+void EditorBottomPanel::_ensure_control_visible(ObjectID p_id) {
+	Control *c = ObjectDB::get_instance<Control>(p_id);
+	if (!c) {
+		return;
+	}
+
+	button_scroll->ensure_control_visible(c);
+}
+
 void EditorBottomPanel::_switch_to_item(bool p_visible, int p_idx, bool p_ignore_lock) {
 	ERR_FAIL_INDEX(p_idx, items.size());
 
@@ -134,7 +143,7 @@ void EditorBottomPanel::_switch_to_item(bool p_visible, int p_idx, bool p_ignore
 		if (expand_button->is_pressed()) {
 			EditorNode::get_top_split()->hide();
 		}
-		callable_mp(button_scroll, &ScrollContainer::ensure_control_visible).call_deferred(items[p_idx].button);
+		callable_mp(this, &EditorBottomPanel::_ensure_control_visible).call_deferred(items[p_idx].button->get_instance_id());
 	} else {
 		add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SNAME("BottomPanel"), EditorStringName(EditorStyles)));
 		items[p_idx].button->set_pressed_no_signal(false);
@@ -306,7 +315,7 @@ EditorBottomPanel::EditorBottomPanel() {
 	item_vbox->add_child(bottom_hbox);
 
 	left_button = memnew(Button);
-	left_button->set_tooltip_text(TTR("Scroll Left\nHold Ctrl to scroll to the begin.\nHold Shift to scroll one page."));
+	left_button->set_tooltip_text(TTRC("Scroll Left\nHold Ctrl to scroll to the begin.\nHold Shift to scroll one page."));
 	left_button->set_accessibility_name(TTRC("Scroll Left"));
 	left_button->set_theme_type_variation("BottomPanelButton");
 	left_button->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
@@ -323,7 +332,7 @@ EditorBottomPanel::EditorBottomPanel() {
 	bottom_hbox->add_child(button_scroll);
 
 	right_button = memnew(Button);
-	right_button->set_tooltip_text(TTR("Scroll Right\nHold Ctrl to scroll to the end.\nHold Shift to scroll one page."));
+	right_button->set_tooltip_text(TTRC("Scroll Right\nHold Ctrl to scroll to the end.\nHold Shift to scroll one page."));
 	right_button->set_accessibility_name(TTRC("Scroll Right"));
 	right_button->set_theme_type_variation("BottomPanelButton");
 	right_button->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
@@ -355,8 +364,7 @@ EditorBottomPanel::EditorBottomPanel() {
 	pin_button->hide();
 	pin_button->set_theme_type_variation("FlatMenuButton");
 	pin_button->set_toggle_mode(true);
-	pin_button->set_tooltip_text(TTR("Pin Bottom Panel Switching"));
-	pin_button->set_accessibility_name(TTRC("Pin Bottom Panel"));
+	pin_button->set_tooltip_text(TTRC("Pin Bottom Panel Switching"));
 	pin_button->connect(SceneStringName(toggled), callable_mp(this, &EditorBottomPanel::_pin_button_toggled));
 
 	expand_button = memnew(Button);

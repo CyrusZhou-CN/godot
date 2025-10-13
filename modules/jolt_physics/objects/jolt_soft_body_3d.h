@@ -32,7 +32,7 @@
 
 #include "jolt_object_3d.h"
 
-#include "servers/physics_server_3d.h"
+#include "servers/physics_3d/physics_server_3d.h"
 
 #include "Jolt/Jolt.h"
 
@@ -95,6 +95,7 @@ class JoltSoftBody3D final : public JoltObject3D {
 	void _pins_changed();
 	void _vertices_changed();
 	void _exceptions_changed();
+	void _motion_changed();
 
 public:
 	JoltSoftBody3D();
