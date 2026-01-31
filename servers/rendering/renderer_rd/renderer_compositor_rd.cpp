@@ -164,6 +164,7 @@ void RendererCompositorRD::initialize() {
 uint64_t RendererCompositorRD::frame = 1;
 
 void RendererCompositorRD::finalize() {
+	texture_storage->_tex_blit_shader_free();
 	memdelete(scene);
 	memdelete(canvas);
 	memdelete(fog);
@@ -219,6 +220,8 @@ void RendererCompositorRD::set_boot_image_with_stretch(const Ref<Image> &p_image
 	screenrect.position /= window_size;
 	screenrect.size /= window_size;
 
+	// p_color never needs to be converted to linear encoding because HDR 2D is always disabled for the boot image.
+	// If HDR 2D can ever be enabled during the boot image, p_color must be converted to linear encoding for this case.
 	RD::DrawListID draw_list = RD::get_singleton()->draw_list_begin_for_screen(DisplayServer::MAIN_WINDOW_ID, p_color);
 
 	RD::get_singleton()->draw_list_bind_render_pipeline(draw_list, blit.pipelines[BLIT_MODE_NORMAL_ALPHA]);
@@ -316,6 +319,7 @@ RendererCompositorRD::RendererCompositorRD() {
 	particles_storage = memnew(RendererRD::ParticlesStorage);
 	fog = memnew(RendererRD::Fog);
 	canvas = memnew(RendererCanvasRenderRD());
+	texture_storage->_tex_blit_shader_initialize();
 
 	String rendering_method = OS::get_singleton()->get_current_rendering_method();
 	uint64_t textures_per_stage = RD::get_singleton()->limit_get(RD::LIMIT_MAX_TEXTURES_PER_SHADER_STAGE);

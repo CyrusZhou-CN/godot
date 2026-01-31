@@ -32,6 +32,7 @@
 
 #include "core/config/project_settings.h"
 #include "core/debugger/engine_debugger.h"
+#include "core/input/input.h"
 #include "core/templates/pair.h"
 #include "core/templates/sort_array.h"
 #include "scene/gui/control.h"
@@ -356,6 +357,8 @@ void Viewport::_sub_window_update(Window *p_window) {
 	const Rect2i r = Rect2i(p_window->get_position(), p_window->get_size());
 
 	if (!p_window->get_flag(Window::FLAG_BORDERLESS)) {
+		TextServer::set_current_drawn_item_oversampling(get_oversampling());
+
 		Ref<StyleBox> panel = gui.subwindow_focused == p_window ? p_window->theme_cache.embedded_border : p_window->theme_cache.embedded_unfocused_border;
 		panel->draw(sw.canvas_item, r);
 
@@ -386,6 +389,8 @@ void Viewport::_sub_window_update(Window *p_window) {
 		bool pressed = gui.subwindow_focused == sw.window && gui.subwindow_drag == SUB_WINDOW_DRAG_CLOSE && gui.subwindow_drag_close_inside;
 		Ref<Texture2D> close_icon = pressed ? p_window->theme_cache.close_pressed : p_window->theme_cache.close;
 		close_icon->draw(sw.canvas_item, r.position + Vector2(r.size.width - close_h_ofs, -close_v_ofs));
+
+		TextServer::set_current_drawn_item_oversampling(0.0);
 	}
 
 	const Transform2D xform = sw.window->window_transform * sw.window->stretch_transform;
@@ -750,7 +755,7 @@ void Viewport::_process_picking() {
 	if (!physics_object_picking) {
 		return;
 	}
-	if (Object::cast_to<Window>(this) && Input::get_singleton()->get_mouse_mode() == Input::MOUSE_MODE_CAPTURED) {
+	if (Object::cast_to<Window>(this) && Input::get_singleton()->get_mouse_mode() == Input::MouseMode::MOUSE_MODE_CAPTURED) {
 		return;
 	}
 	if (!gui.mouse_in_viewport || gui.subwindow_over) {
@@ -2824,16 +2829,22 @@ void Viewport::_post_gui_grab_click_focus() {
 
 ///////////////////////////////
 
-void Viewport::push_text_input(const String &p_text) {
+void Viewport::_push_text_input(const String &p_text, bool p_emit_signal) {
 	ERR_MAIN_THREAD_GUARD;
 	if (gui.subwindow_focused) {
 		gui.subwindow_focused->push_text_input(p_text);
 		return;
 	}
 
-	if (gui.key_focus) {
-		gui.key_focus->call("set_text", p_text);
+	StringName set_text_method = SNAME("_set_text");
+	if (!gui.key_focus || !gui.key_focus->has_method(set_text_method)) {
+		return;
 	}
+	gui.key_focus->call(set_text_method, p_text, p_emit_signal);
+}
+
+void Viewport::push_text_input(const String &p_text) {
+	_push_text_input(p_text, false);
 }
 
 Viewport::SubWindowResize Viewport::_sub_window_get_resize_margin(Window *p_subwindow, const Point2 &p_point) {
@@ -3048,7 +3059,8 @@ bool Viewport::_sub_windows_forward_input(const Ref<InputEvent> &p_event) {
 
 					int close_h_ofs = sw.window->theme_cache.close_h_offset;
 					int close_v_ofs = sw.window->theme_cache.close_v_offset;
-					Ref<Texture2D> close_icon = sw.window->theme_cache.close;
+					bool pressed = gui.subwindow_focused == sw.window && gui.subwindow_drag == SUB_WINDOW_DRAG_CLOSE && gui.subwindow_drag_close_inside;
+					Ref<Texture2D> close_icon = pressed ? sw.window->theme_cache.close_pressed : sw.window->theme_cache.close;
 
 					Rect2 close_rect;
 					close_rect.position = Vector2(r.position.x + r.size.x - close_h_ofs, r.position.y - close_v_ofs);
@@ -3212,7 +3224,7 @@ void Viewport::_window_start_resize(SubWindowResize p_edge, Window *p_window) {
 	_sub_window_update(sw.window);
 }
 
-void Viewport::_update_mouse_over() {
+void Viewport::_update_mouse_over(const Ref<InputEventMouse> &p_mm) {
 	// Update gui.mouse_over and gui.subwindow_over in all Viewports.
 	// Send necessary mouse_enter/mouse_exit signals and the MOUSE_ENTER/MOUSE_EXIT notifications for every Viewport in the SceneTree.
 
@@ -3223,18 +3235,20 @@ void Viewport::_update_mouse_over() {
 
 	if (get_tree()->get_root()->is_embedding_subwindows() || is_sub_viewport()) {
 		// Use embedder logic for calculating mouse position.
-		_update_mouse_over(gui.last_mouse_pos);
+		_update_mouse_over(p_mm->get_position());
 	} else {
 		// Native Window: Use DisplayServer logic for calculating mouse position.
 		Window *receiving_window = get_tree()->get_root()->gui.windowmanager_window_over;
 		if (!receiving_window) {
 			return;
 		}
-
-		Vector2 pos = DisplayServer::get_singleton()->mouse_get_position() - receiving_window->get_position();
-		pos = receiving_window->get_final_transform().affine_inverse().xform(pos);
-
-		receiving_window->_update_mouse_over(pos);
+		if (receiving_window->get_window_id() != p_mm->get_window_id()) {
+			Vector2 pos = DisplayServer::get_singleton()->mouse_get_position() - receiving_window->get_position();
+			pos = receiving_window->get_final_transform().affine_inverse().xform(pos);
+			receiving_window->_update_mouse_over(pos);
+		} else {
+			receiving_window->_update_mouse_over(p_mm->get_position());
+		}
 	}
 }
 
@@ -3448,10 +3462,10 @@ void Viewport::_drop_mouse_over(Control *p_until_control) {
 	gui.sending_mouse_enter_exit_notifications = false;
 }
 
-void Viewport::push_input(const Ref<InputEvent> &p_event, bool p_local_coords) {
+void Viewport::push_input(RequiredParam<InputEvent> rp_event, bool p_local_coords) {
 	ERR_MAIN_THREAD_GUARD;
 	ERR_FAIL_COND(!is_inside_tree());
-	ERR_FAIL_COND(p_event.is_null());
+	EXTRACT_PARAM_OR_FAIL(p_event, rp_event);
 
 	if (disable_input || disable_input_override) {
 		return;
@@ -3482,9 +3496,7 @@ void Viewport::push_input(const Ref<InputEvent> &p_event, bool p_local_coords) {
 
 	Ref<InputEventMouse> me = ev;
 	if (me.is_valid()) {
-		gui.last_mouse_pos = me->get_position();
-
-		_update_mouse_over();
+		_update_mouse_over(me);
 	}
 
 	if (is_embedding_subwindows() && _sub_windows_forward_input(ev)) {
@@ -3517,11 +3529,11 @@ void Viewport::push_input(const Ref<InputEvent> &p_event, bool p_local_coords) {
 }
 
 #ifndef DISABLE_DEPRECATED
-void Viewport::push_unhandled_input(const Ref<InputEvent> &p_event, bool p_local_coords) {
+void Viewport::push_unhandled_input(RequiredParam<InputEvent> rp_event, bool p_local_coords) {
 	ERR_MAIN_THREAD_GUARD;
 	WARN_DEPRECATED_MSG(R"*(The "push_unhandled_input()" method is deprecated, use "push_input()" instead.)*");
 	ERR_FAIL_COND(!is_inside_tree());
-	ERR_FAIL_COND(p_event.is_null());
+	EXTRACT_PARAM_OR_FAIL(p_event, rp_event);
 
 	local_input_handled = false;
 
@@ -3565,7 +3577,7 @@ void Viewport::_push_unhandled_input_internal(const Ref<InputEvent> &p_event) {
 
 #if !defined(PHYSICS_2D_DISABLED) || !defined(PHYSICS_3D_DISABLED)
 	if (physics_object_picking && !is_input_handled()) {
-		if (Input::get_singleton()->get_mouse_mode() != Input::MOUSE_MODE_CAPTURED &&
+		if (Input::get_singleton()->get_mouse_mode() != Input::MouseMode::MOUSE_MODE_CAPTURED &&
 				(Object::cast_to<InputEventMouse>(*p_event) ||
 						Object::cast_to<InputEventScreenDrag>(*p_event) ||
 						Object::cast_to<InputEventScreenTouch>(*p_event)

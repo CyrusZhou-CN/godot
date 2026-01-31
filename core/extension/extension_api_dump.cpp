@@ -88,7 +88,7 @@ static String get_property_info_type_name(const PropertyInfo &p_info) {
 }
 
 static String get_type_meta_name(const GodotTypeInfo::Metadata metadata) {
-	static const char *argmeta[13] = { "none", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float", "double", "char16", "char32" };
+	static const char *argmeta[14] = { "none", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float", "double", "char16", "char32", "required" };
 	return argmeta[metadata];
 }
 
@@ -1182,6 +1182,10 @@ Dictionary GDExtensionAPIDump::generate_extension_api(bool p_include_docs) {
 				List<MethodInfo> signal_list;
 				ClassDB::get_signal_list(class_name, &signal_list, true);
 				for (const MethodInfo &F : signal_list) {
+					if (F.name.begins_with("_")) {
+						continue; // Hidden signal.
+					}
+
 					StringName signal_name = F.name;
 					Dictionary d2;
 					d2["name"] = String(signal_name);

@@ -241,6 +241,9 @@ class PopupMenu : public Popup {
 	String _atr(int p_idx, const String &p_text) const;
 	void _submenu_hidden();
 
+	bool shrink_height = true;
+	bool shrink_width = true;
+
 protected:
 	virtual void _pre_popup() override;
 	virtual Rect2i _popup_adjust_rect() const override;
@@ -249,6 +252,7 @@ protected:
 	virtual void remove_child_notify(Node *p_child) override;
 	virtual void _input_from_window(const Ref<InputEvent> &p_event) override;
 
+	virtual void _popup_base(const Rect2i &p_bounds = Rect2i()) override;
 	void _notification(int p_what);
 	bool _set(const StringName &p_name, const Variant &p_value);
 	bool _get(const StringName &p_name, Variant &r_ret) const { return property_helper.property_get_value(p_name, r_ret); }
@@ -328,6 +332,7 @@ public:
 	void set_item_multistate(int p_idx, int p_state);
 	void toggle_item_multistate(int p_idx);
 	void set_item_shortcut_disabled(int p_idx, bool p_disabled);
+	void set_item_index(int p_idx, int p_target_idx);
 
 	void toggle_item_checked(int p_idx);
 
@@ -408,7 +413,12 @@ public:
 	void set_allow_search(bool p_allow);
 	bool get_allow_search() const;
 
-	virtual void popup(const Rect2i &p_bounds = Rect2i()) override;
+	void set_shrink_height(bool p_shrink);
+	bool get_shrink_height() const;
+
+	void set_shrink_width(bool p_shrink);
+	bool get_shrink_width() const;
+
 	virtual void set_visible(bool p_visible) override;
 
 	PopupMenu();

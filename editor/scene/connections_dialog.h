@@ -84,11 +84,6 @@ public:
 					unbinds = ccu->get_unbinds();
 					base_callable = ccu->get_callable();
 				}
-
-				// The source object may already be bound, ignore it to prevent display of the source object.
-				if ((flags & CONNECT_APPEND_SOURCE_OBJECT) && (source == binds[0])) {
-					binds.remove_at(0);
-				}
 			} else {
 				base_callable = p_connection.callable;
 			}
@@ -237,6 +232,9 @@ class ConnectionsDock : public VBoxContainer {
 		SLOT_MENU_DISCONNECT,
 	};
 
+	VBoxContainer *holder = nullptr;
+	Label *select_an_object = nullptr;
+
 	Object *selected_object = nullptr;
 	ConnectionsDockTree *tree = nullptr;
 
@@ -282,7 +280,7 @@ protected:
 	static void _bind_methods();
 
 public:
-	void set_object(Object *p_obj);
+	void set_object(Object *p_object);
 	void update_tree();
 
 	ConnectionsDock();
