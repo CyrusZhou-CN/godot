@@ -31,9 +31,12 @@
 #include "graph_edit.h"
 #include "graph_edit.compat.inc"
 
+#include "core/config/engine.h"
 #include "core/input/input.h"
 #include "core/math/geometry_2d.h"
 #include "core/math/math_funcs.h"
+#include "core/object/callable_mp.h"
+#include "core/object/class_db.h"
 #include "core/os/keyboard.h"
 #include "scene/2d/line_2d.h"
 #include "scene/gui/box_container.h"
@@ -2590,7 +2593,7 @@ TypedArray<Dictionary> GraphEdit::_get_connections_intersecting_with_rect(const 
 TypedArray<Dictionary> GraphEdit::_get_connection_list_from_node(const StringName &p_node) const {
 	ERR_FAIL_COND_V(!connection_map.has(p_node), TypedArray<Dictionary>());
 
-	List<Ref<GraphEdit::Connection>> connections_from_node = connection_map.get(p_node);
+	List<Ref<GraphEdit::Connection>> connections_from_node(connection_map.get(p_node));
 	TypedArray<Dictionary> connections_from_node_dict;
 
 	for (const Ref<Connection> &conn : connections_from_node) {

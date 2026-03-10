@@ -32,7 +32,9 @@
 
 #ifdef ALSA_ENABLED
 
+#include "core/config/engine.h"
 #include "core/config/project_settings.h"
+#include "core/math/math_funcs_binary.h"
 #include "core/os/os.h"
 
 #include <cerrno>
@@ -112,7 +114,7 @@ Error AudioDriverALSA::init_output_device() {
 	// Ref: https://www.alsa-project.org/main/index.php/FramesPeriods
 	unsigned int periods = 2;
 	int latency = Engine::get_singleton()->get_audio_output_latency();
-	buffer_frames = closest_power_of_2(latency * mix_rate / 1000);
+	buffer_frames = Math::closest_power_of_2(latency * mix_rate / 1000);
 	buffer_size = buffer_frames * periods;
 	period_size = buffer_frames;
 
