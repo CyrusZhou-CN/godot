@@ -68,9 +68,7 @@ void TextureStorage::Texture::cleanup() {
 	if (RD::get_singleton()->texture_is_valid(rd_texture)) {
 		RD::get_singleton()->free_rid(rd_texture);
 	}
-	if (canvas_texture) {
-		memdelete(canvas_texture);
-	}
+	memdelete(canvas_texture);
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -418,7 +416,7 @@ TextureStorage::TextureStorage() {
 		}
 	}
 
-	{ //create default array white
+	{ // Creates a default 2D texture array filled with a white color.
 
 		RD::TextureFormat tformat;
 		tformat.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
@@ -444,7 +442,33 @@ TextureStorage::TextureStorage() {
 		}
 	}
 
-	{ //create default array black
+	{ // Сreates a default 2D texture array filled with a black color.
+
+		RD::TextureFormat tformat;
+		tformat.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
+		tformat.width = 4;
+		tformat.height = 4;
+		tformat.array_layers = 1;
+		tformat.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT;
+		tformat.texture_type = RD::TEXTURE_TYPE_2D_ARRAY;
+
+		Vector<uint8_t> pv;
+		pv.resize(16 * 4);
+		for (int i = 0; i < 16; i++) {
+			pv.set(i * 4 + 0, 0);
+			pv.set(i * 4 + 1, 0);
+			pv.set(i * 4 + 2, 0);
+			pv.set(i * 4 + 3, 255);
+		}
+
+		{
+			Vector<Vector<uint8_t>> vpv;
+			vpv.push_back(pv);
+			default_rd_textures[DEFAULT_RD_TEXTURE_2D_ARRAY_BLACK] = RD::get_singleton()->texture_create(tformat, RD::TextureView(), vpv);
+		}
+	}
+
+	{ // Creates a default 2D texture array filled with a transparent color.
 
 		RD::TextureFormat tformat;
 		tformat.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
@@ -466,7 +490,7 @@ TextureStorage::TextureStorage() {
 		{
 			Vector<Vector<uint8_t>> vpv;
 			vpv.push_back(pv);
-			default_rd_textures[DEFAULT_RD_TEXTURE_2D_ARRAY_BLACK] = RD::get_singleton()->texture_create(tformat, RD::TextureView(), vpv);
+			default_rd_textures[DEFAULT_RD_TEXTURE_2D_ARRAY_TRANSPARENT] = RD::get_singleton()->texture_create(tformat, RD::TextureView(), vpv);
 		}
 	}
 
@@ -1156,7 +1180,7 @@ void TextureStorage::texture_3d_initialize(RID p_texture, Image::Format p_format
 	TextureToRDFormat ret_format;
 	Image::Format validated_format = Image::FORMAT_MAX;
 	Vector<uint8_t> all_data;
-	uint32_t mipmap_count = 0;
+	uint32_t mipmap_count = 1;
 	Vector<Texture::BufferSlice3D> slices;
 	{
 		Vector<Ref<Image>> images;
@@ -1175,7 +1199,6 @@ void TextureStorage::texture_3d_initialize(RID p_texture, Image::Format p_format
 
 		all_data.resize(all_data_size); //consolidate all data here
 		uint32_t offset = 0;
-		Size2i prev_size;
 		for (int i = 0; i < p_data.size(); i++) {
 			uint32_t s = images[i]->get_data().size();
 
@@ -1191,10 +1214,21 @@ void TextureStorage::texture_3d_initialize(RID p_texture, Image::Format p_format
 			offset += s;
 
 			Size2i img_size(images[i]->get_width(), images[i]->get_height());
-			if (img_size != prev_size) {
+		}
+
+		// Calculate the mipmap count again.
+		if (p_mipmaps) {
+			int mmw = p_width;
+			int mmh = p_height;
+			int mmd = p_depth;
+
+			while (mmw > 1 || mmh > 1 || mmd > 1) {
 				mipmap_count++;
+
+				mmw = MAX(1, mmw >> 1);
+				mmh = MAX(1, mmh >> 1);
+				mmd = MAX(1, mmd >> 1);
 			}
-			prev_size = img_size;
 		}
 	}
 
@@ -1561,6 +1595,14 @@ RID TextureStorage::texture_create_from_native_handle(RSE::TextureType p_type, I
 
 		case Image::FORMAT_ASTC_4x4_HDR:
 			format = RD::DATA_FORMAT_ASTC_4x4_SFLOAT_BLOCK;
+			break;
+
+		case Image::FORMAT_ASTC_6x6:
+			format = RD::DATA_FORMAT_ASTC_6x6_UNORM_BLOCK;
+			break;
+
+		case Image::FORMAT_ASTC_6x6_HDR:
+			format = RD::DATA_FORMAT_ASTC_6x6_SFLOAT_BLOCK;
 			break;
 
 		case Image::FORMAT_ASTC_8x8:
@@ -2018,7 +2060,11 @@ void TextureStorage::texture_replace(RID p_texture, RID p_by_texture) {
 	Vector<RID> proxies_to_update = tex->proxies;
 	Vector<RID> proxies_to_redirect = by_tex->proxies;
 
+	RID streaming_state = tex->streaming_state;
+
 	*tex = *by_tex;
+
+	tex->streaming_state = streaming_state; // restore streaming state
 
 	tex->proxies = proxies_to_update; //restore proxies, so they can be updated
 
@@ -2037,6 +2083,64 @@ void TextureStorage::texture_replace(RID p_texture, RID p_by_texture) {
 
 	decal_atlas_mark_dirty_on_texture(p_texture);
 	area_light_atlas_mark_dirty_on_texture(p_texture);
+}
+
+void TextureStorage::texture_replace_compatible(RID p_texture, RID p_by_texture) {
+	Texture *tex = texture_owner.get_or_null(p_texture);
+	ERR_FAIL_NULL(tex);
+	ERR_FAIL_COND(tex->proxy_to.is_valid()); //can't replace proxy
+	Texture *by_tex = texture_owner.get_or_null(p_by_texture);
+	ERR_FAIL_NULL(by_tex);
+	ERR_FAIL_COND(by_tex->proxy_to.is_valid()); //can't replace proxy
+
+	if (tex == by_tex) {
+		return;
+	}
+
+	RID old_rd_texture = tex->rd_texture;
+	RID old_rd_texture_srgb = tex->rd_texture_srgb;
+	RID new_rd_texture = by_tex->rd_texture;
+	RID new_rd_texture_srgb = by_tex->rd_texture_srgb;
+
+	if (tex->canvas_texture) {
+		memdelete(tex->canvas_texture);
+		tex->canvas_texture = nullptr;
+	}
+
+	Vector<RID> proxies_to_update = tex->proxies;
+	Vector<RID> proxies_to_redirect = by_tex->proxies;
+
+	*tex = *by_tex;
+
+	tex->proxies = proxies_to_update; //restore proxies, so they can be updated
+
+	if (tex->canvas_texture) {
+		tex->canvas_texture->diffuse = p_texture; //update
+	}
+
+	for (int i = 0; i < proxies_to_update.size(); i++) {
+		texture_proxy_update(proxies_to_update[i], p_texture);
+	}
+	for (int i = 0; i < proxies_to_redirect.size(); i++) {
+		texture_proxy_update(proxies_to_redirect[i], p_texture);
+	}
+
+	// Replace RD-level textures: patches uniform sets and defers old resources.
+	if (old_rd_texture_srgb.is_valid() && old_rd_texture_srgb != new_rd_texture_srgb) {
+		if (new_rd_texture_srgb.is_valid()) {
+			RD::get_singleton()->texture_replace_rid(old_rd_texture_srgb, new_rd_texture_srgb);
+		} else {
+			RD::get_singleton()->free_rid(old_rd_texture_srgb);
+		}
+	}
+	if (old_rd_texture != new_rd_texture) {
+		RD::get_singleton()->texture_replace_rid(old_rd_texture, new_rd_texture);
+	}
+
+	//delete last, so proxies can be updated
+	texture_owner.free(p_by_texture);
+
+	decal_atlas_mark_dirty_on_texture(p_texture);
 }
 
 void TextureStorage::texture_set_size_override(RID p_texture, int p_width, int p_height) {
@@ -2634,15 +2738,16 @@ Ref<Image> TextureStorage::_validate_texture_format(const Ref<Image> &p_image, T
 			if (RD::get_singleton()->texture_is_format_supported_for_usage(RD::DATA_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT)) {
 				r_format.format = RD::DATA_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK;
 				r_format.format_srgb = RD::DATA_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK;
+				r_format.swizzle_g = RD::TEXTURE_SWIZZLE_A;
 			} else {
 				//not supported, reconvert
 				r_format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
 				r_format.format_srgb = RD::DATA_FORMAT_R8G8B8A8_SRGB;
+				r_format.swizzle_g = RD::TEXTURE_SWIZZLE_G;
 				image->decompress();
 				image->convert(Image::FORMAT_RGBA8);
 			}
 			r_format.swizzle_r = RD::TEXTURE_SWIZZLE_R;
-			r_format.swizzle_g = RD::TEXTURE_SWIZZLE_A;
 			r_format.swizzle_b = RD::TEXTURE_SWIZZLE_ZERO;
 			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_ONE;
 		} break;
@@ -2650,15 +2755,16 @@ Ref<Image> TextureStorage::_validate_texture_format(const Ref<Image> &p_image, T
 			if (RD::get_singleton()->texture_is_format_supported_for_usage(RD::DATA_FORMAT_BC3_UNORM_BLOCK, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT)) {
 				r_format.format = RD::DATA_FORMAT_BC3_UNORM_BLOCK;
 				r_format.format_srgb = RD::DATA_FORMAT_BC3_SRGB_BLOCK;
+				r_format.swizzle_g = RD::TEXTURE_SWIZZLE_A;
 			} else {
 				//not supported, reconvert
 				r_format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
 				r_format.format_srgb = RD::DATA_FORMAT_R8G8B8A8_SRGB;
+				r_format.swizzle_g = RD::TEXTURE_SWIZZLE_G;
 				image->decompress();
 				image->convert(Image::FORMAT_RGBA8);
 			}
 			r_format.swizzle_r = RD::TEXTURE_SWIZZLE_R;
-			r_format.swizzle_g = RD::TEXTURE_SWIZZLE_A;
 			r_format.swizzle_b = RD::TEXTURE_SWIZZLE_ZERO;
 			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_ONE;
 		} break;
@@ -2694,6 +2800,38 @@ Ref<Image> TextureStorage::_validate_texture_format(const Ref<Image> &p_image, T
 			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_A;
 
 		} break; // astc 4x4 HDR
+		case Image::FORMAT_ASTC_6x6: {
+			if (RD::get_singleton()->texture_is_format_supported_for_usage(RD::DATA_FORMAT_ASTC_6x6_UNORM_BLOCK, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT)) {
+				r_format.format = RD::DATA_FORMAT_ASTC_6x6_UNORM_BLOCK;
+				r_format.format_srgb = RD::DATA_FORMAT_ASTC_6x6_SRGB_BLOCK;
+			} else {
+				//not supported, reconvert
+				image->decompress();
+				r_format.format = RD::DATA_FORMAT_R8G8B8A8_UNORM;
+				r_format.format_srgb = RD::DATA_FORMAT_R8G8B8A8_SRGB;
+				image->convert(Image::FORMAT_RGBA8);
+			}
+			r_format.swizzle_r = RD::TEXTURE_SWIZZLE_R;
+			r_format.swizzle_g = RD::TEXTURE_SWIZZLE_G;
+			r_format.swizzle_b = RD::TEXTURE_SWIZZLE_B;
+			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_A;
+
+		} break; // astc 6x6
+		case Image::FORMAT_ASTC_6x6_HDR: {
+			if (RD::get_singleton()->texture_is_format_supported_for_usage(RD::DATA_FORMAT_ASTC_6x6_SFLOAT_BLOCK, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT)) {
+				r_format.format = RD::DATA_FORMAT_ASTC_6x6_SFLOAT_BLOCK;
+			} else {
+				//not supported, reconvert
+				image->decompress();
+				r_format.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+				image->convert(Image::FORMAT_RGBAH);
+			}
+			r_format.swizzle_r = RD::TEXTURE_SWIZZLE_R;
+			r_format.swizzle_g = RD::TEXTURE_SWIZZLE_G;
+			r_format.swizzle_b = RD::TEXTURE_SWIZZLE_B;
+			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_A;
+
+		} break; // astc 8x8 HDR
 		case Image::FORMAT_ASTC_8x8: {
 			if (RD::get_singleton()->texture_is_format_supported_for_usage(RD::DATA_FORMAT_ASTC_8x8_UNORM_BLOCK, RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT)) {
 				r_format.format = RD::DATA_FORMAT_ASTC_8x8_UNORM_BLOCK;
@@ -2823,9 +2961,11 @@ Ref<Image> TextureStorage::_validate_texture_format(const Ref<Image> &p_image, T
 		}
 	}
 
-	// RGB formats are often not supported, only print warnings about them when launched with the --verbose flag.
-	const bool is_rgb_format = original_format == Image::FORMAT_RGB8 || original_format == Image::FORMAT_RGBH || original_format == Image::FORMAT_RGBF;
-	if ((is_print_verbose_enabled() || !is_rgb_format) && original_format != image->get_format()) {
+	// RGB formats are usually not supported, do not print warnings about them.
+	const bool is_rgb_format = original_format == Image::FORMAT_RGB8 || original_format == Image::FORMAT_RGBH || original_format == Image::FORMAT_RGBF ||
+			original_format == Image::FORMAT_RGB16 || original_format == Image::FORMAT_RGB16I;
+
+	if (!is_rgb_format && original_format != image->get_format()) {
 		WARN_PRINT(vformat("Image format %s not supported by hardware, converting to %s.", Image::get_format_name(original_format), Image::get_format_name(image->get_format())));
 	}
 
@@ -3183,6 +3323,31 @@ void TextureStorage::_texture_format_from_rd(RD::DataFormat p_rd_format, Texture
 			r_format.swizzle_b = RD::TEXTURE_SWIZZLE_B;
 			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_A;
 		} break; // astc 4x4
+		case RD::DATA_FORMAT_ASTC_6x6_UNORM_BLOCK: {
+			r_format.image_format = Image::FORMAT_ASTC_6x6;
+			r_format.rd_format = RD::DATA_FORMAT_ASTC_6x6_UNORM_BLOCK;
+			r_format.swizzle_r = RD::TEXTURE_SWIZZLE_R;
+			r_format.swizzle_g = RD::TEXTURE_SWIZZLE_G;
+			r_format.swizzle_b = RD::TEXTURE_SWIZZLE_B;
+			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_A;
+		} break;
+		case RD::DATA_FORMAT_ASTC_6x6_SRGB_BLOCK: {
+			r_format.image_format = Image::FORMAT_ASTC_6x6;
+			r_format.rd_format = RD::DATA_FORMAT_ASTC_6x6_UNORM_BLOCK;
+			r_format.rd_format_srgb = RD::DATA_FORMAT_ASTC_6x6_SRGB_BLOCK;
+			r_format.swizzle_r = RD::TEXTURE_SWIZZLE_R;
+			r_format.swizzle_g = RD::TEXTURE_SWIZZLE_G;
+			r_format.swizzle_b = RD::TEXTURE_SWIZZLE_B;
+			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_A;
+		} break;
+		case RD::DATA_FORMAT_ASTC_6x6_SFLOAT_BLOCK: {
+			r_format.image_format = Image::FORMAT_ASTC_6x6_HDR;
+			r_format.rd_format = RD::DATA_FORMAT_ASTC_6x6_SFLOAT_BLOCK;
+			r_format.swizzle_r = RD::TEXTURE_SWIZZLE_R;
+			r_format.swizzle_g = RD::TEXTURE_SWIZZLE_G;
+			r_format.swizzle_b = RD::TEXTURE_SWIZZLE_B;
+			r_format.swizzle_a = RD::TEXTURE_SWIZZLE_A;
+		} break; // astc 8x8
 		case RD::DATA_FORMAT_ASTC_8x8_UNORM_BLOCK: {
 			// Q: Do we do as we do below, just create the sRGB variant?
 			r_format.image_format = Image::FORMAT_ASTC_8x8;
@@ -5271,4 +5436,10 @@ uint32_t TextureStorage::render_target_get_color_usage_bits(bool p_msaa) {
 		// FIXME: Storage bit should only be requested when FSR is required.
 		return RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
 	}
+}
+
+void TextureStorage::texture_2d_attach_streaming_state(RID p_texture, RID p_streaming_state) {
+	Texture *tex = texture_owner.get_or_null(p_texture);
+	ERR_FAIL_NULL_MSG(tex, "Invalid texture RID.");
+	tex->streaming_state = p_streaming_state;
 }
