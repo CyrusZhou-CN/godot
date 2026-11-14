@@ -967,7 +967,10 @@ TreeItem *TreeItem::create_child(int p_index) {
 		}
 	} else {
 		first_child = ti;
-		children_cache.insert(0, ti);
+		// If the cache is empty but there are other children, it has not been built, so we cannot update it.
+		if (!children_cache.is_empty() || !ti->next) {
+			children_cache.insert(0, ti);
+		}
 	}
 
 	if (item_prev == last_child) {
@@ -5346,7 +5349,8 @@ void Tree::_notification(int p_what) {
 			}
 
 			Point2 mouse_position = get_viewport()->get_mouse_position() - get_global_position();
-			if (scrolling && get_rect().grow(theme_cache.scroll_border).has_point(mouse_position)) {
+			// Check if the viewport has a control being hovered, to prevent unwanted scrolling when dragging over a popup/dialog in Wayland.
+			if (scrolling && get_viewport()->gui_get_hovered_control() && get_rect().grow(theme_cache.scroll_border).has_point(mouse_position)) {
 				Point2 point;
 
 				if ((Math::abs(mouse_position.x) < Math::abs(mouse_position.x - get_size().width)) && (Math::abs(mouse_position.x) < theme_cache.scroll_border)) {
@@ -5691,8 +5695,8 @@ void Tree::_notification(int p_what) {
 			}
 
 			sticky_stack_end = 0;
+			sticky_list.clear();
 			if (root && !drop_mode_flags) {
-				sticky_list.clear();
 				Vector2 stick_ofs;
 				Vector2 last_ofs = stick_ofs;
 				real_t height_limit = get_size().y * .4; // Prevent sticky items from ever exceeding 40% of the space
